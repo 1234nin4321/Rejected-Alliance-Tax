@@ -121,7 +121,7 @@ To verify a successful installation:
 This is experimental and I take no responsibility for any damage it may cause.
  If you encounter issues during deployment:
 
-*   **Logs**: Check `/var/www/seat/storage/logs/laravel.log`
+*   **Logs**: Check `/var/www/seat/storage/logs/`
 *   **Missing Permissions**: If the menu icon is missing, run this fallback command:
     ```bash
     sudo mysql seat -e "INSERT IGNORE INTO permissions (title, name, description, division, created_at, updated_at) VALUES ('View Alliance Tax', 'alliancetax.view', 'View alliance mining tax information', 'financial', NOW(), NOW()), ('Manage Alliance Tax', 'alliancetax.manage', 'Manage alliance mining tax settings', 'financial', NOW(), NOW()), ('Alliance Tax Reports', 'alliancetax.reports', 'Access alliance tax reports', 'financial', NOW(), NOW()), ('Alliance Tax Administrator', 'alliancetax.admin', 'Full administrative access', 'financial', NOW(), NOW()); INSERT IGNORE INTO permission_role (permission_id, role_id) SELECT p.id, r.id FROM permissions p CROSS JOIN roles r WHERE p.name LIKE 'alliancetax.%' AND r.title = 'Superuser';"
