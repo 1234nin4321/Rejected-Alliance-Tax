@@ -44,13 +44,17 @@ class SeedAllianceTaxPermissions extends Migration
         ];
 
         $hasDescription = Schema::hasColumn('permissions', 'description');
+        $hasTimestamps = Schema::hasColumn('permissions', 'updated_at'); // Assuming if updated_at exists, created_at does too
+        $hasDivision = Schema::hasColumn('permissions', 'division'); // Re-check this properly
 
         foreach ($fullPermissions as $perm) {
             $match = [$slugColumn => $perm['slug']];
             
-            $values = [
-                'updated_at' => Carbon::now(),
-            ];
+            $values = [];
+
+            if ($hasTimestamps) {
+                $values['updated_at'] = Carbon::now();
+            }
 
             if ($hasDescription) {
                 $values['description'] = $perm['desc'];
@@ -69,10 +73,18 @@ class SeedAllianceTaxPermissions extends Migration
 
             // Ensure created_at is set on insert
             if (!DB::table('permissions')->where($match)->exists()) {
-                $values['created_at'] = Carbon::now();
-                DB::table('permissions')->insert(array_merge($match, $values));
+                if ($hasTimestamps) {
+                    $values['created_at'] = Carbon::now();
+                }
+                
+                // If the array is empty (no timestamps, no description, no division), we still need to insert something alongside the match
+                // Fortunately insert() takes an array. But if values is empty, we just insert the match keys.
+                $insertData = array_merge($match, $values);
+                DB::table('permissions')->insert($insertData);
             } else {
-                DB::table('permissions')->where($match)->update($values);
+                if (!empty($values)) {
+                    DB::table('permissions')->where($match)->update($values);
+                }
             }
         }
 
