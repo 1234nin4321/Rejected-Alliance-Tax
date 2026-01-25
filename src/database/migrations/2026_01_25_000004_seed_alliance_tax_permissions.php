@@ -41,17 +41,28 @@ class SeedAllianceTaxPermissions extends Migration
         ];
 
         foreach ($permissions as $perm) {
-            // Insert permission
-            DB::table('permissions')->updateOrInsert(
-                ['name' => $perm['name']],
-                [
+            // Check if permission already exists
+            $exists = DB::table('permissions')->where('name', $perm['name'])->exists();
+
+            if ($exists) {
+                DB::table('permissions')
+                    ->where('name', $perm['name'])
+                    ->update([
+                        'title' => $perm['title'],
+                        'description' => $perm['description'],
+                        'division' => $perm['division'],
+                        'updated_at' => Carbon::now(),
+                    ]);
+            } else {
+                DB::table('permissions')->insert([
                     'title' => $perm['title'],
+                    'name' => $perm['name'],
                     'description' => $perm['description'],
                     'division' => $perm['division'],
                     'created_at' => Carbon::now(),
                     'updated_at' => Carbon::now(),
-                ]
-            );
+                ]);
+            }
         }
 
         // Auto-assign to Superuser
