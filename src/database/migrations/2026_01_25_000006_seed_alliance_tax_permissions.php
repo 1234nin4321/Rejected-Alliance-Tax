@@ -43,13 +43,18 @@ class SeedAllianceTaxPermissions extends Migration
              ],
         ];
 
+        $hasDescription = Schema::hasColumn('permissions', 'description');
+
         foreach ($fullPermissions as $perm) {
             $match = [$slugColumn => $perm['slug']];
             
             $values = [
-                'description' => $perm['desc'],
                 'updated_at' => Carbon::now(),
             ];
+
+            if ($hasDescription) {
+                $values['description'] = $perm['desc'];
+            }
 
             if ($hasDivision) {
                 // Ensure 'financial' division exists or default to 'general'
