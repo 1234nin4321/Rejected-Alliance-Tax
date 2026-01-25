@@ -15,44 +15,11 @@ class SeedAllianceTaxPermissions extends Migration
     public function up()
     {
         // SeAT's permission schema has varied. 
-        // Newer versions often use 'name' for the slug, older ones use 'title'.
+        // Newer versions use 'name' for the slug, older ones use 'title'.
         // We dynamically detect the column to be safe.
         $slugColumn = Schema::hasColumn('permissions', 'name') ? 'name' : 'title';
         $hasDivision = Schema::hasColumn('permissions', 'division');
 
-        $permissions = [
-            'alliancetax.view' => 'View alliance mining tax information',
-            'alliancetax.manage' => 'Manage alliance mining tax settings and rates',
-            'alliancetax.reports' => 'Access alliance mining tax reports',
-            'alliancetax.admin' => 'Full administrative access to alliance tax system',
-        ];
-
-        foreach ($permissions as $slug => $desc) {
-            $data = [
-                'description' => $desc,
-                'updated_at' => Carbon::now(),
-            ];
-
-            // Only add creation timestamp if inserting (handled by updateOrInsert, but good practice to have in attributes)
-            // Ideally updateOrInsert merges attributes. We'll simplify.
-            // If it's a new record, we need created_at.
-            // updateOrInsert(attributes, values). 
-            
-            $values = $data;
-            if ($hasDivision) {
-                $values['division'] = 'financial';
-            }
-            // Add title if we are using name as slug? 
-            // If slugColumn is 'name', then 'title' is likely the human readable name.
-            // If slugColumn is 'title', then 'title' is the slug.
-            if ($slugColumn === 'name') {
-                 // We don't have a human readable title in our array, so let's capitalize the slug parts or use description
-                 // Actually the user's previous code had 'title' => 'View Alliance Tax'
-                 // Let's reconstruct that map
-            }
-        }
-        
-        // Re-defining permissions with full metadata to be precise
         $fullPermissions = [
              [
                 'slug' => 'alliancetax.view',
@@ -85,6 +52,8 @@ class SeedAllianceTaxPermissions extends Migration
             ];
 
             if ($hasDivision) {
+                // Ensure 'financial' division exists or default to 'general'
+                // SeAT usually has 'financial', but let's be safe
                 $values['division'] = 'financial';
             }
             
@@ -92,8 +61,6 @@ class SeedAllianceTaxPermissions extends Migration
             if ($slugColumn === 'name') {
                 $values['title'] = $perm['label'];
             }
-            // If the slug is 'title', we can't put the Label in 'title' because 'title' is occupied by the slug.
-            // In that case, the label usually doesn't exist or is handled by translation files.
 
             // Ensure created_at is set on insert
             if (!DB::table('permissions')->where($match)->exists()) {
@@ -114,12 +81,18 @@ class SeedAllianceTaxPermissions extends Migration
                 ->pluck('id');
 
             foreach ($permissionIds as $permId) {
-                DB::table('permission_role')->updateOrInsert(
-                    [
+                // Use explicit check instead of updateOrInsert
+                $exists = DB::table('permission_role')
+                    ->where('permission_id', $permId)
+                    ->where('role_id', $superUserRole->id)
+                    ->exists();
+
+                if (!$exists) {
+                    DB::table('permission_role')->insert([
                         'permission_id' => $permId,
                         'role_id' => $superUserRole->id,
-                    ]
-                );
+                    ]);
+                }
             }
         }
     }
@@ -142,10 +115,12 @@ class SeedAllianceTaxPermissions extends Migration
 
         $permissionIds = DB::table('permissions')->whereIn($slugColumn, $names)->pluck('id');
 
-        // Remove role associations
-        DB::table('permission_role')->whereIn('permission_id', $permissionIds)->delete();
+        if ($permissionIds->isNotEmpty()) {
+            // Remove role associations
+            DB::table('permission_role')->whereIn('permission_id', $permissionIds)->delete();
 
-        // Remove permissions
-        DB::table('permissions')->whereIn($slugColumn, $names)->delete();
+            // Remove permissions
+            DB::table('permissions')->whereIn($slugColumn, $names)->delete();
+        }
     }
 }
