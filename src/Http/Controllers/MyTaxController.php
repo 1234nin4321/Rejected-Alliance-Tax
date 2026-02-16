@@ -143,6 +143,24 @@ class MyTaxController extends Controller
             ->orderBy('mining_date', 'desc')
             ->get();
         
+        // Filter out activities that shouldn't be taxed (like WH gas)
+        $miningActivity = $miningActivity->filter(function($activity) {
+            $category = \Rejected\SeatAllianceTax\Helpers\OreCategory::getCategoryForTypeId($activity->type_id);
+            
+            // Skip Gas mined in Wormholes (solar_system_id starting with 31)
+            if ($category === 'gas' && $activity->solar_system_id >= 31000000 && $activity->solar_system_id < 32000000) {
+                return false;
+            }
+            
+            // Also apply system restrictions if they exist
+            $taxedSystemIds = \Rejected\SeatAllianceTax\Models\AllianceTaxSystem::pluck('solar_system_id')->toArray();
+            if (!empty($taxedSystemIds) && !in_array($activity->solar_system_id, $taxedSystemIds)) {
+                return false;
+            }
+
+            return true;
+        });
+        
         // Load all active tax rates
         $allRates = \Rejected\SeatAllianceTax\Models\AllianceTaxRate::where('is_active', true)->get();
         $defaultRate = \Rejected\SeatAllianceTax\Models\AllianceTaxSetting::get('default_tax_rate', 10);

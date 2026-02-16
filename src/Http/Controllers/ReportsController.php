@@ -85,6 +85,7 @@ class ReportsController extends Controller
             'moon_r16' => 0,
             'moon_r32' => 0,
             'moon_r64' => 0,
+            'gas' => 0,
         ];
 
         foreach ($activities as $activity) {
@@ -108,7 +109,15 @@ class ReportsController extends Controller
             ->select('invGroups.groupID', 'invGroups.categoryID')
             ->first();
 
-        if (!$groupInfo || $groupInfo->categoryID != 25) {
+        if (!$groupInfo) {
+            return 'ore';
+        }
+
+        if (in_array($groupInfo->groupID, [490, 496, 711])) {
+            return 'gas';
+        }
+
+        if ($groupInfo->categoryID != 25) {
             return 'ore';
         }
 

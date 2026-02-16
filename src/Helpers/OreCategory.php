@@ -20,7 +20,15 @@ class OreCategory
             ->select('invGroups.groupID', 'invGroups.categoryID')
             ->first();
 
-        if (!$groupInfo || $groupInfo->categoryID != 25) {
+        if (!$groupInfo) {
+            return 'ore';
+        }
+
+        if (in_array($groupInfo->groupID, [490, 496, 711])) {
+            return 'gas';
+        }
+
+        if ($groupInfo->categoryID != 25) {
             return 'ore';
         }
 

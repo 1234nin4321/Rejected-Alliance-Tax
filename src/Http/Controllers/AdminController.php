@@ -38,7 +38,7 @@ class AdminController extends Controller
             'alliance_id' => 'nullable|integer',
             'corporation_id' => 'nullable|integer',
             'tax_rate' => 'required|numeric|min:0|max:100',
-            'item_category' => 'required|in:all,ore,ice,moon_r4,moon_r8,moon_r16,moon_r32,moon_r64',
+            'item_category' => 'required|in:all,ore,ice,moon_r4,moon_r8,moon_r16,moon_r32,moon_r64,gas',
             'effective_from' => 'required|date',
             'effective_until' => 'nullable|date|after:effective_from',
         ]);

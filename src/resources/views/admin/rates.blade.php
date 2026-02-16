@@ -78,6 +78,7 @@
                             <option value="moon_r16">Moon Ore (R16)</option>
                             <option value="moon_r32">Moon Ore (R32)</option>
                             <option value="moon_r64">Moon Ore (R64)</option>
+                            <option value="gas">Gas</option>
                         </select>
                         <p class="help-block">Specific categories override 'All Items' rates.</p>
                     </div>
@@ -159,6 +160,8 @@
                                     <span class="label label-info">Ice</span>
                                 @elseif($rate->item_category === 'ore')
                                     <span class="label label-default">Standard Ore</span>
+                                @elseif($rate->item_category === 'gas')
+                                    <span class="label label-warning" style="background-color: #6347ff;">Gas</span>
                                 @else
                                     <span class="label label-primary">All Items</span>
                                 @endif

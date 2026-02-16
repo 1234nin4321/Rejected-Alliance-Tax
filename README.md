@@ -17,7 +17,7 @@ See [INSTALL.md](INSTALL.md) for deployment instructions.
 
 ## Requirements
 
-*   SeAT 4.x / 5.x
+*   SeAT 5.x
 *   PHP 8.1+
 
 ## License

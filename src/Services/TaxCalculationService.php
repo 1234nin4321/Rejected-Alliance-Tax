@@ -193,6 +193,13 @@ class TaxCalculationService
 
             foreach ($activities as $activity) {
                 $category = $this->getItemCategory($activity->type_id);
+                
+                // Skip Gas mined in Wormholes (solar_system_id starting with 31)
+                // Wormhole systems are in the range 31000000 - 31999999
+                if ($category === 'gas' && $activity->solar_system_id >= 31000000 && $activity->solar_system_id < 32000000) {
+                    continue;
+                }
+
                 // We use the activity's actual corp for rate check
                 $taxRate = $this->getTaxRate($activity->corporation_id, $allianceId, $periodStart, $category);
                 
@@ -302,7 +309,16 @@ class TaxCalculationService
             ->select('invGroups.groupID', 'invGroups.categoryID')
             ->first();
 
-        if (!$groupInfo || $groupInfo->categoryID != 25) {
+        if (!$groupInfo) {
+            return 'ore';
+        }
+
+        // Gas (Groups: 490: Mykoserocin, 496: Cytoserocin, 711: Gas Clouds/Fullerite)
+        if (in_array($groupInfo->groupID, [490, 496, 711])) {
+            return 'gas';
+        }
+
+        if ($groupInfo->categoryID != 25) {
             return 'ore';
         }
 

@@ -116,6 +116,8 @@
                                         <span class="label label-info">Moon Ore (R4)</span>
                                     @elseif($category === 'ice')
                                         <span class="label label-primary">Ice</span>
+                                    @elseif($category === 'gas')
+                                        <span class="label label-warning" style="background-color: #6347ff;">Gas</span>
                                     @else
                                         <span class="label label-default">Standard Ore</span>
                                     @endif
