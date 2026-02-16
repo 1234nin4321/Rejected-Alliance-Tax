@@ -4,6 +4,8 @@
 @section('page_header', 'Tax Rates Management')
 
 @section('full')
+<div class="alert alert-info">DEBUG: VIEW LOADED FROM PLUGIN SOURCE</div>
+
 
 @if(session('success'))
 <div class="alert alert-success alert-dismissible">
