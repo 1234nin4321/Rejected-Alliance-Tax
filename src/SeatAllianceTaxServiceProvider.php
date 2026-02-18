@@ -80,6 +80,7 @@ class SeatAllianceTaxServiceProvider extends AbstractSeatPlugin
         $this->commands([
             \Rejected\SeatAllianceTax\Console\Commands\SyncMiningData::class,
             \Rejected\SeatAllianceTax\Console\Commands\DiagnoseMiningTax::class,
+            \Rejected\SeatAllianceTax\Console\Commands\RecalculateCredits::class,
             \Rejected\SeatAllianceTax\Commands\CalculateAllianceTax::class,
             \Rejected\SeatAllianceTax\Commands\ReconcilePayments::class,
             \Rejected\SeatAllianceTax\Commands\RefreshJitaPrices::class,
