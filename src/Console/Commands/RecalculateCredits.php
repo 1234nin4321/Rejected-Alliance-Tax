@@ -13,7 +13,7 @@ use Seat\Eveapi\Models\Wallet\CorporationWalletJournal;
 class RecalculateCredits extends Command
 {
     protected $signature = 'alliancetax:recalculate-credits {--dry-run : Show what would change without saving}';
-    protected $description = 'Recalculate tax credit balances from actual paid invoices and wallet transactions';
+    protected $description = 'Recalculate tax credit balances by comparing total ISK sent vs total invoiced per user';
 
     public function handle()
     {
@@ -29,106 +29,151 @@ class RecalculateCredits extends Command
             return 1;
         }
 
-        // Detect the ID column in wallet journal
+        $this->info("Tax Collection Corp: {$taxCorpId}");
+
+        // Detect ref_type column
         $journalTable = (new CorporationWalletJournal)->getTable();
         $columns = Schema::getColumnListing($journalTable);
-        $idColumn = in_array('ref_id', $columns) ? 'ref_id' : 'id';
-        
-        $this->info("Wallet journal table: {$journalTable}, ID column: {$idColumn}");
+        $refTypeColumn = in_array('ref_type', $columns) ? 'ref_type' : null;
 
-        // Get all paid invoices that have a payment_ref_id
-        $paidInvoices = AllianceTaxInvoice::where('status', 'paid')
-            ->whereNotNull('payment_ref_id')
-            ->get();
+        // Get all invoices grouped by user
+        // First, find all unique character_ids that have invoices
+        $invoiceCharacters = AllianceTaxInvoice::select('character_id')
+            ->distinct()
+            ->pluck('character_id');
 
-        $this->info("Found {$paidInvoices->count()} paid invoices with transaction references.");
-
-        // Reset all balances first
-        if (!$dryRun) {
-            AllianceTaxBalance::query()->update(['balance' => 0]);
-        }
-        $this->info("Reset all credit balances to 0.");
+        $this->info("Found invoices for " . $invoiceCharacters->count() . " characters.");
 
         $creditsByCharacter = [];
-        $totalCredits = 0;
+        $totalCreditsApplied = 0;
 
-        foreach ($paidInvoices as $invoice) {
-            $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
+        foreach ($invoiceCharacters as $charId) {
+            // Find the SeAT user who owns this character
+            $userId = DB::table('refresh_tokens')->where('character_id', $charId)->value('user_id');
             
-            // Get the original invoice amount
-            // If partial payments were applied, we need the original amount
-            // Check metadata for applied_payments to reconstruct original
-            $appliedPayments = $metadata['applied_payments'] ?? [];
-            
-            // The current invoice->amount might have been reduced by partial payments
-            // Original amount = current amount + sum of all applied partial payments
-            $partialTotal = 0;
-            foreach ($appliedPayments as $p) {
-                $partialTotal += (float) ($p['amount'] ?? 0);
-            }
-            $originalAmount = (float) $invoice->amount + $partialTotal;
-
-            // Look up the actual wallet transaction
-            $tx = DB::table($journalTable)
-                ->where('corporation_id', $taxCorpId)
-                ->where($idColumn, $invoice->payment_ref_id)
-                ->first();
-
-            if (!$tx) {
-                $this->line("  ⚠ Invoice #{$invoice->id} (char {$invoice->character_id}): transaction {$invoice->payment_ref_id} not found in journal — skipping");
+            if (!$userId) {
+                $this->line("  ⚠ Character {$charId}: no user found, skipping");
                 continue;
             }
 
-            $txAmount = (float) $tx->amount;
+            // Get ALL characters for this user
+            $userCharIds = DB::table('refresh_tokens')
+                ->where('user_id', $userId)
+                ->pluck('character_id')
+                ->map(fn($id) => (int) $id)
+                ->toArray();
+
+            // Skip if we already processed this user (via another character)
+            $userKey = 'user_' . $userId;
+            if (isset($creditsByCharacter[$userKey])) {
+                continue;
+            }
+
+            // Get the main character for display
+            $mainCharId = DB::table('users')->where('id', $userId)->value('main_character_id') ?? $charId;
+            $charName = DB::table('character_infos')->where('character_id', $mainCharId)->value('name') ?? "Character {$mainCharId}";
+
+            // 1. Calculate TOTAL invoiced for this user (original amounts)
+            //    We use ALL invoices regardless of status
+            $invoices = AllianceTaxInvoice::whereIn('character_id', $userCharIds)->get();
             
-            // Calculate total paid across ALL transactions for this invoice
-            $totalPaidForInvoice = $txAmount;
-            foreach ($appliedPayments as $p) {
-                // Don't double-count the final payment (which is payment_ref_id)
-                if (($p['tx_id'] ?? '') != $invoice->payment_ref_id) {
-                    // Look up partial payment transaction amount
-                    $partialTx = DB::table($journalTable)
-                        ->where('corporation_id', $taxCorpId)
-                        ->where($idColumn, $p['tx_id'] ?? '')
-                        ->first();
-                    if ($partialTx) {
-                        $totalPaidForInvoice += (float) $partialTx->amount;
-                    }
+            $totalInvoiced = 0;
+            foreach ($invoices as $invoice) {
+                $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
+                $appliedPayments = $metadata['applied_payments'] ?? [];
+                
+                // Reconstruct original invoice amount
+                // For partial/paid invoices, the current amount might have been reduced
+                $partialTotal = 0;
+                foreach ($appliedPayments as $p) {
+                    $partialTotal += (float)($p['amount'] ?? 0);
+                }
+                
+                // Original amount = current remaining + all partial payments applied
+                $originalAmount = (float)$invoice->amount + $partialTotal;
+                $totalInvoiced += $originalAmount;
+            }
+
+            // 2. Calculate TOTAL ISK sent by this user's characters to the tax corp
+            $txQuery = DB::table($journalTable)
+                ->where('corporation_id', $taxCorpId)
+                ->where('amount', '>', 0)
+                ->where(function ($q) use ($userCharIds) {
+                    $q->whereIn('first_party_id', $userCharIds)
+                      ->orWhereIn('second_party_id', $userCharIds);
+                });
+
+            // Filter to player donation types if possible
+            if ($refTypeColumn) {
+                $txQuery->whereIn($refTypeColumn, [
+                    'player_donation',
+                    'corporation_account_withdrawal',
+                    'direct_transfer',
+                    'cash_out',
+                    'deposit',
+                    'union_payment',
+                ]);
+            }
+
+            $totalSent = (float) $txQuery->sum('amount');
+
+            // 3. Credit = Total Sent - Total Invoiced
+            $credit = $totalSent - $totalInvoiced;
+
+            $this->line(
+                "  {$charName}: Sent " . number_format($totalSent, 0) . 
+                " ISK, Invoiced " . number_format($totalInvoiced, 0) . 
+                " ISK → " . ($credit > 0 ? "Credit: " . number_format($credit, 0) . " ISK" : "No credit")
+            );
+
+            if ($credit > 1) { // More than 1 ISK to avoid rounding noise
+                $creditsByCharacter[$userKey] = [
+                    'character_id' => $mainCharId,
+                    'character_name' => $charName,
+                    'credit' => floor($credit),
+                ];
+                $totalCreditsApplied += floor($credit);
+            } else {
+                $creditsByCharacter[$userKey] = [
+                    'character_id' => $mainCharId,
+                    'character_name' => $charName,
+                    'credit' => 0,
+                ];
+            }
+        }
+
+        // Reset and apply
+        if (!$dryRun) {
+            AllianceTaxBalance::query()->update(['balance' => 0]);
+            
+            foreach ($creditsByCharacter as $data) {
+                if ($data['credit'] > 0) {
+                    $balance = AllianceTaxBalance::firstOrCreate(['character_id' => $data['character_id']]);
+                    $balance->balance = $data['credit'];
+                    $balance->save();
                 }
             }
-
-            $overpaid = $totalPaidForInvoice - $originalAmount;
-            
-            if ($overpaid > 1) { // More than 1 ISK overpayment (ignore rounding noise)
-                $charId = $invoice->character_id;
-                $creditsByCharacter[$charId] = ($creditsByCharacter[$charId] ?? 0) + $overpaid;
-                $totalCredits += $overpaid;
-                
-                $charName = optional($invoice->character)->name ?? $charId;
-                $this->info("  ✅ {$charName}: paid " . number_format($totalPaidForInvoice, 0) 
-                    . " for invoice of " . number_format($originalAmount, 0) 
-                    . " → credit: " . number_format($overpaid, 0) . " ISK");
-            }
         }
 
-        // Apply credits
-        if (!$dryRun) {
-            foreach ($creditsByCharacter as $charId => $credit) {
-                $balance = AllianceTaxBalance::firstOrCreate(['character_id' => $charId]);
-                $balance->balance = floor($credit);
-                $balance->save();
-            }
-        }
+        $usersWithCredit = collect($creditsByCharacter)->filter(fn($d) => $d['credit'] > 0);
 
         $this->newLine();
         $this->info("Summary:");
-        $this->info("  Characters with credit: " . count($creditsByCharacter));
-        $this->info("  Total credit: " . number_format($totalCredits, 0) . " ISK");
+        $this->info("  Users with credit: " . $usersWithCredit->count());
+        $this->info("  Total credit: " . number_format($totalCreditsApplied, 0) . " ISK");
+
+        if ($usersWithCredit->isNotEmpty()) {
+            $this->newLine();
+            $this->info("Credit Breakdown:");
+            foreach ($usersWithCredit as $data) {
+                $this->info("  ✅ {$data['character_name']}: " . number_format($data['credit'], 0) . " ISK");
+            }
+        }
         
         if ($dryRun) {
-            $this->warn("No changes saved (dry run). Run without --dry-run to apply.");
+            $this->warn("\nNo changes saved (dry run). Run without --dry-run to apply.");
         } else {
-            $this->info("Credits applied successfully.");
+            $this->info("\n✅ Credits applied successfully.");
         }
 
         return 0;
