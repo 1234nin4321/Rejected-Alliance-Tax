@@ -34,6 +34,11 @@ Route::group([
             'as' => 'alliancetax.mytax.character',
             'uses' => 'MyTaxController@character',
         ]);
+
+        Route::get('/invoice/{id}', [
+            'as' => 'alliancetax.mytax.invoice',
+            'uses' => 'MyTaxController@invoiceDetail',
+        ]);
     });
 
     // Character Mining Activity

@@ -228,6 +228,79 @@ class MyTaxController extends Controller
     }
 
     /**
+     * Show individual invoice detail for the user
+     */
+    public function invoiceDetail($invoiceId)
+    {
+        $user = auth()->user();
+        $characterIds = $user->characters->pluck('character_id');
+
+        // Only allow viewing own invoices
+        $invoice = AllianceTaxInvoice::with(['character', 'corporation'])
+            ->whereIn('character_id', $characterIds)
+            ->findOrFail($invoiceId);
+
+        // Parse metadata
+        $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
+        $appliedPayments = $metadata['applied_payments'] ?? [];
+
+        // Calculate original amount and payment progress
+        $totalPaidOnInvoice = 0;
+        foreach ($appliedPayments as $p) {
+            $totalPaidOnInvoice += (float)($p['amount'] ?? 0);
+        }
+        $originalAmount = (float)$invoice->amount + $totalPaidOnInvoice;
+        if ($invoice->status === 'paid') {
+            $originalAmount = max($originalAmount, (float)$invoice->amount);
+        }
+
+        // Get mining activity for the invoice period if available
+        $miningActivity = collect();
+        if (isset($metadata['period_start']) && isset($metadata['period_end'])) {
+            $periodStart = \Carbon\Carbon::parse($metadata['period_start']);
+            $periodEnd = \Carbon\Carbon::parse($metadata['period_end']);
+
+            // Get all characters for this user
+            $miningActivity = AllianceMiningActivity::whereIn('character_id', $characterIds)
+                ->whereBetween('mining_date', [$periodStart, $periodEnd])
+                ->with('character')
+                ->orderBy('mining_date', 'desc')
+                ->get();
+
+            // Apply system filtering
+            $taxedSystemIds = AllianceTaxSystem::pluck('solar_system_id')->toArray();
+            if (!empty($taxedSystemIds)) {
+                $miningActivity = $miningActivity->filter(function ($activity) use ($taxedSystemIds) {
+                    return in_array($activity->solar_system_id, $taxedSystemIds);
+                });
+            }
+
+            // Filter out WH gas
+            $miningActivity = $miningActivity->filter(function ($activity) {
+                $category = \Rejected\SeatAllianceTax\Helpers\OreCategory::getCategoryForTypeId($activity->type_id);
+                if ($category === 'gas' && $activity->solar_system_id >= 31000000 && $activity->solar_system_id < 32000000) {
+                    return false;
+                }
+                return true;
+            });
+        }
+
+        // Get tax corp info for display
+        $taxCorpId = AllianceTaxSetting::get('tax_collection_corporation_id');
+        $taxCorp = $taxCorpId ? \Seat\Eveapi\Models\Corporation\CorporationInfo::where('corporation_id', $taxCorpId)->first() : null;
+
+        return view('alliancetax::mytax.invoice', compact(
+            'invoice',
+            'metadata',
+            'appliedPayments',
+            'totalPaidOnInvoice',
+            'originalAmount',
+            'miningActivity',
+            'taxCorp'
+        ));
+    }
+
+    /**
      * Calculate an estimated tax for the current uninvoiced period.
      * This looks at mining activity that hasn't been invoiced yet and
      * applies the current tax rates to give players a preview.
