@@ -249,7 +249,121 @@
 </div>
 @endif
 
-<!-- Mining Summary by Character -->
+<!-- Invoice History -->
+<div class="row">
+    <div class="col-xs-12">
+        <div class="box box-default">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-file-text-o"></i> Invoice History</h3>
+                <span class="badge pull-right">{{ $invoices->count() }} invoice(s)</span>
+            </div>
+            <div class="box-body">
+                @if($invoices->isEmpty())
+                    <p class="text-muted text-center" style="padding: 20px;">
+                        <i class="fa fa-inbox fa-2x"></i><br>
+                        No invoices found yet.
+                    </p>
+                @else
+                    <table class="table table-hover table-striped" id="invoice-history-table">
+                        <thead>
+                            <tr>
+                                <th>Invoice #</th>
+                                <th>Character</th>
+                                <th>Period</th>
+                                <th class="text-right">Amount</th>
+                                <th>Status</th>
+                                <th>Issued</th>
+                                <th>Paid</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($invoices as $invoice)
+                            @php
+                                $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
+                                $appliedPayments = $metadata['applied_payments'] ?? [];
+                                $totalPaidOnInvoice = 0;
+                                foreach ($appliedPayments as $p) {
+                                    $totalPaidOnInvoice += (float)($p['amount'] ?? 0);
+                                }
+                                $originalAmount = (float)$invoice->amount + $totalPaidOnInvoice;
+                                if ($invoice->status === 'paid') {
+                                    $originalAmount = max($originalAmount, (float)$invoice->amount);
+                                }
+                            @endphp
+                            <tr>
+                                <td>
+                                    <code>#{{ $invoice->id }}</code>
+                                </td>
+                                <td>
+                                    {!! img('characters', 'portrait', $invoice->character_id, 32, ['class' => 'img-circle eve-icon small-icon']) !!}
+                                    {{ optional($invoice->character)->name ?? 'Unknown' }}
+                                </td>
+                                <td>
+                                    @if(isset($metadata['period_start']))
+                                        {{ \Carbon\Carbon::parse($metadata['period_start'])->format('M d') }}
+                                        - {{ \Carbon\Carbon::parse($metadata['period_end'])->format('M d, Y') }}
+                                    @else
+                                        {{ \Carbon\Carbon::parse($invoice->created_at)->format('M d, Y') }}
+                                    @endif
+                                </td>
+                                <td class="text-right">
+                                    @if($invoice->status === 'partial')
+                                        <span class="text-warning">
+                                            <strong>{{ number_format($invoice->amount, 0) }} ISK</strong>
+                                        </span>
+                                        <br>
+                                        <small class="text-muted">
+                                            of {{ number_format($originalAmount, 0) }} ISK
+                                        </small>
+                                        <div class="progress" style="margin-bottom: 0; margin-top: 4px; height: 6px;">
+                                            @php
+                                                $pctPaid = $originalAmount > 0 ? ($totalPaidOnInvoice / $originalAmount) * 100 : 0;
+                                            @endphp
+                                            <div class="progress-bar progress-bar-warning" style="width: {{ $pctPaid }}%"></div>
+                                        </div>
+                                        <small class="text-success">{{ number_format($totalPaidOnInvoice, 0) }} ISK paid</small>
+                                    @elseif($invoice->status === 'paid')
+                                        <span class="text-success">
+                                            <strong>{{ number_format($originalAmount, 0) }} ISK</strong>
+                                        </span>
+                                    @else
+                                        <span class="text-danger">
+                                            <strong>{{ number_format($invoice->amount, 0) }} ISK</strong>
+                                        </span>
+                                    @endif
+                                </td>
+                                <td>
+                                    @if($invoice->status === 'paid')
+                                        <span class="label label-success"><i class="fa fa-check"></i> Paid</span>
+                                    @elseif($invoice->status === 'partial')
+                                        <span class="label" style="background-color: #f39c12;"><i class="fa fa-adjust"></i> Partial</span>
+                                    @elseif($invoice->status === 'overdue' || ($invoice->due_date && \Carbon\Carbon::parse($invoice->due_date)->isPast()))
+                                        <span class="label label-danger"><i class="fa fa-exclamation-triangle"></i> Overdue</span>
+                                    @else
+                                        <span class="label label-warning"><i class="fa fa-clock-o"></i> Sent</span>
+                                    @endif
+                                </td>
+                                <td>
+                                    <small>{{ \Carbon\Carbon::parse($invoice->created_at)->format('M d, Y') }}</small>
+                                </td>
+                                <td>
+                                    @if($invoice->paid_at)
+                                        <small class="text-success">{{ \Carbon\Carbon::parse($invoice->paid_at)->format('M d, Y') }}</small>
+                                    @else
+                                        <small class="text-muted">—</small>
+                                    @endif
+                                </td>
+                            </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                @endif
+            </div>
+        </div>
+    </div>
+</div>
+
+
 @if($miningSummary->isNotEmpty())
 <div class="row">
     <div class="col-xs-12">

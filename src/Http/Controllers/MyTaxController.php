@@ -6,6 +6,7 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use Rejected\SeatAllianceTax\Models\AllianceTaxCalculation;
+use Rejected\SeatAllianceTax\Models\AllianceTaxInvoice;
 use Rejected\SeatAllianceTax\Models\AllianceMiningActivity;
 use Rejected\SeatAllianceTax\Models\AllianceTaxRate;
 use Rejected\SeatAllianceTax\Models\AllianceTaxSetting;
@@ -84,6 +85,12 @@ class MyTaxController extends Controller
         // === TAX ESTIMATE for current uninvoiced period ===
         $taxEstimate = $this->calculateTaxEstimate($characterIds);
 
+        // Get all invoices for user's characters (full history)
+        $invoices = AllianceTaxInvoice::whereIn('character_id', $characterIds)
+            ->with('character')
+            ->orderBy('created_at', 'desc')
+            ->get();
+
         return view('alliancetax::mytax.index', compact(
             'pendingTaxes',
             'paidTaxes',
@@ -93,7 +100,8 @@ class MyTaxController extends Controller
             'taxCorp',
             'recentActivity',
             'miningSummary',
-            'taxEstimate'
+            'taxEstimate',
+            'invoices'
         ));
     }
 
