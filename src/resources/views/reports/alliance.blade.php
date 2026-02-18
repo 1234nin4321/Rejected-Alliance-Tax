@@ -50,7 +50,7 @@
     <div class="col-md-3">
         <div class="small-box bg-purple">
             <div class="inner">
-                <h3>{{ number_format($totalTaxGross / 1000000, 2) }}M</h3>
+                <h3>{{ number_format($totalTaxGross / 1000000, 0) }}M</h3>
                 <p>Gross Tax Owed</p>
             </div>
             <div class="icon">
@@ -61,7 +61,7 @@
     <div class="col-md-3">
         <div class="small-box bg-yellow">
             <div class="inner">
-                <h3>{{ number_format($totalTaxPending / 1000000, 2) }}M</h3>
+                <h3>{{ number_format($totalTaxPending / 1000000, 0) }}M</h3>
                 <p>Net Tax Pending</p>
             </div>
             <div class="icon">
@@ -72,7 +72,7 @@
     <div class="col-md-3">
         <div class="small-box bg-green">
             <div class="inner">
-                <h3>{{ number_format($totalTaxPaid / 1000000, 2) }}M</h3>
+                <h3>{{ number_format($totalTaxPaid / 1000000, 0) }}M</h3>
                 <p>Tax Collected</p>
             </div>
             <div class="icon">
@@ -224,3 +224,4 @@
 </div>
 
 @endsection
+

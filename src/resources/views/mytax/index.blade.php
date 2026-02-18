@@ -14,7 +14,7 @@
             </div>
             <div class="box-body">
                 <h3 class="text-danger">
-                    <strong>{{ number_format($totalPending, 2) }} ISK</strong>
+                    <strong>{{ number_format($totalPending, 0) }} ISK</strong>
                 </h3>
                 @if($pendingTaxes->isNotEmpty())
                     <p class="text-muted">
@@ -37,14 +37,14 @@
             <div class="box-body">
                 @if($taxEstimate['has_estimate'])
                     <h3 style="color: #f39c12;">
-                        <strong>~{{ number_format($taxEstimate['net_estimated_tax'], 2) }} ISK</strong>
+                        <strong>~{{ number_format($taxEstimate['net_estimated_tax'], 0) }} ISK</strong>
                     </h3>
                     <p class="text-muted">
                         <small>{{ $taxEstimate['period_label'] }} (not yet invoiced)</small>
                     </p>
                 @else
                     <h3 class="text-muted">
-                        <strong>0.00 ISK</strong>
+                        <strong>0 ISK</strong>
                     </h3>
                     <p class="text-muted">
                         @if(($taxEstimate['reason'] ?? '') === 'already_invoiced')
@@ -65,7 +65,7 @@
             </div>
             <div class="box-body">
                 <h3 class="text-info">
-                    <strong>{{ number_format($totalBalance, 2) }} ISK</strong>
+                    <strong>{{ number_format($totalBalance, 0) }} ISK</strong>
                 </h3>
                 <p class="text-muted">
                     Available to deduct from future taxes
@@ -81,7 +81,7 @@
             </div>
             <div class="box-body">
                 <h3 class="text-success">
-                    <strong>{{ number_format($totalPaid, 2) }} ISK</strong>
+                    <strong>{{ number_format($totalPaid, 0) }} ISK</strong>
                 </h3>
                 <p class="text-muted">
                     {{ $paidTaxes->count() }} payment(s)
@@ -144,9 +144,9 @@
                                 {{ $charEstimate['character_name'] }}
                             </td>
                             <td class="text-right">{{ number_format($charEstimate['sessions']) }}</td>
-                            <td class="text-right">{{ number_format($charEstimate['mined_value'], 2) }} ISK</td>
+                            <td class="text-right">{{ number_format($charEstimate['mined_value'], 0) }} ISK</td>
                             <td class="text-right" style="color: #f39c12;">
-                                <strong>~{{ number_format($charEstimate['estimated_tax'], 2) }} ISK</strong>
+                                <strong>~{{ number_format($charEstimate['estimated_tax'], 0) }} ISK</strong>
                             </td>
                         </tr>
                         @endforeach
@@ -154,10 +154,10 @@
                         <tr style="border-top: 2px solid #f39c12;">
                             <td colspan="2" class="text-right"><strong>Totals:</strong></td>
                             <td class="text-right">
-                                <strong>{{ number_format($taxEstimate['total_mined_value'], 2) }} ISK</strong>
+                                <strong>{{ number_format($taxEstimate['total_mined_value'], 0) }} ISK</strong>
                             </td>
                             <td class="text-right" style="color: #f39c12;">
-                                <strong>~{{ number_format($taxEstimate['total_estimated_tax'], 2) }} ISK</strong>
+                                <strong>~{{ number_format($taxEstimate['total_estimated_tax'], 0) }} ISK</strong>
                             </td>
                         </tr>
 
@@ -165,7 +165,7 @@
                         <tr>
                             <td colspan="3" class="text-right text-info"><strong>Tax Credit to Apply:</strong></td>
                             <td class="text-right text-info">
-                                <strong>-{{ number_format($taxEstimate['credit_applicable'], 2) }} ISK</strong>
+                                <strong>-{{ number_format($taxEstimate['credit_applicable'], 0) }} ISK</strong>
                             </td>
                         </tr>
                         @endif
@@ -174,7 +174,7 @@
                             <td colspan="3" class="text-right"><strong>Estimated Net Tax Owed:</strong></td>
                             <td class="text-right">
                                 <strong style="font-size: 16px; color: #f39c12;">
-                                    ~{{ number_format($taxEstimate['net_estimated_tax'], 2) }} ISK
+                                    ~{{ number_format($taxEstimate['net_estimated_tax'], 0) }} ISK
                                 </strong>
                             </td>
                         </tr>
@@ -217,10 +217,10 @@
                                 </a>
                             </td>
                             <td>{{ \Carbon\Carbon::parse($tax->tax_period)->format('Y-m-d') }}</td>
-                            <td class="text-right text-muted">{{ number_format($tax->tax_amount_gross ?? $tax->tax_amount, 2) }} ISK</td>
-                            <td class="text-right text-info">{{ number_format($tax->credit_applied ?? 0, 2) }} ISK</td>
+                            <td class="text-right text-muted">{{ number_format($tax->tax_amount_gross ?? $tax->tax_amount, 0) }} ISK</td>
+                            <td class="text-right text-info">{{ number_format($tax->credit_applied ?? 0, 0) }} ISK</td>
                             <td class="text-right">
-                                <strong class="text-danger">{{ number_format($tax->tax_amount, 2) }} ISK</strong>
+                                <strong class="text-danger">{{ number_format($tax->tax_amount, 0) }} ISK</strong>
                             </td>
                             <td>
                                 <span class="label label-warning">Pending</span>
@@ -236,7 +236,7 @@
                             <td colspan="4" class="text-right"><strong>TOTAL OUTSTANDING:</strong></td>
                             <td class="text-right">
                                 <strong class="text-danger" style="font-size: 16px;">
-                                    {{ number_format($totalPending, 2) }} ISK
+                                    {{ number_format($totalPending, 0) }} ISK
                                 </strong>
                             </td>
                             <td colspan="2"></td>
@@ -276,7 +276,7 @@
                             </td>
                             <td class="text-right">{{ number_format($summary->mining_sessions) }}</td>
                             <td class="text-right">{{ number_format($summary->total_quantity) }}</td>
-                            <td class="text-right">{{ number_format($summary->total_value, 2) }} ISK</td>
+                            <td class="text-right">{{ number_format($summary->total_value, 0) }} ISK</td>
                         </tr>
                         @endforeach
                     </tbody>
@@ -319,7 +319,7 @@
                                 {{ \Rejected\SeatAllianceTax\Services\OreNameTranslationService::translate($activity->type_name) }}
                             </td>
                             <td class="text-right">{{ number_format($activity->quantity) }}</td>
-                            <td class="text-right">{{ number_format($activity->estimated_value, 2) }} ISK</td>
+                            <td class="text-right">{{ number_format($activity->estimated_value, 0) }} ISK</td>
                         </tr>
                         @endforeach
                     </tbody>
@@ -360,3 +360,4 @@
 @endif
 
 @endsection
+

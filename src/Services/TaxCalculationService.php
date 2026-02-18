@@ -458,7 +458,7 @@ class TaxCalculationService
                 'tax_calculation_id' => $userTax['calculation_ids'][0],
                 'character_id' => $userTax['main_character_id'],
                 'corporation_id' => $userTax['corporation_id'],
-                'amount' => $userTax['total_amount'],
+                'amount' => floor($userTax['total_amount']),
                 'invoice_date' => now(),
                 'due_date' => $dueDate,
                 'status' => 'sent',

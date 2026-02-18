@@ -10,7 +10,7 @@
     <div class="col-md-4">
         <div class="small-box bg-yellow">
             <div class="inner">
-                <h3>{{ number_format($stats['total_sent'] / 1000000, 2) }}M</h3>
+                <h3>{{ number_format($stats['total_sent'] / 1000000, 0) }}M</h3>
                 <p>Outstanding Invoices</p>
             </div>
             <div class="icon"><i class="fa fa-file-text"></i></div>
@@ -19,7 +19,7 @@
     <div class="col-md-4">
         <div class="small-box bg-red">
             <div class="inner">
-                <h3>{{ number_format($stats['total_overdue'] / 1000000, 2) }}M</h3>
+                <h3>{{ number_format($stats['total_overdue'] / 1000000, 0) }}M</h3>
                 <p>Overdue</p>
             </div>
             <div class="icon"><i class="fa fa-exclamation-triangle"></i></div>
@@ -28,7 +28,7 @@
     <div class="col-md-4">
         <div class="small-box bg-green">
             <div class="inner">
-                <h3>{{ number_format($stats['total_paid'] / 1000000, 2) }}M</h3>
+                <h3>{{ number_format($stats['total_paid'] / 1000000, 0) }}M</h3>
                 <p>Paid</p>
             </div>
             <div class="icon"><i class="fa fa-check"></i></div>
@@ -172,8 +172,8 @@
                                     </td>
                                     <td>{{ $calc->corporation->name ?? 'Unknown' }}</td>
                                     <td>{{ \Carbon\Carbon::parse($calc->tax_period)->format('Y-m-d') }}</td>
-                                    <td class="text-right text-muted">{{ number_format($calc->total_mined_value, 2) }} ISK</td>
-                                    <td class="text-right"><strong>{{ number_format($calc->tax_amount, 2) }} ISK</strong></td>
+                                    <td class="text-right text-muted">{{ number_format($calc->total_mined_value, 0) }} ISK</td>
+                                    <td class="text-right"><strong>{{ number_format($calc->tax_amount, 0) }} ISK</strong></td>
                                     <td class="text-right" style="padding-right: 20px;">
                                         <form method="POST" action="{{ route('alliancetax.admin.calculations.destroy', $calc->id) }}" style="display:inline;">
                                             @csrf
@@ -221,10 +221,27 @@
                                     <tr>
                                         <td style="padding-left: 20px;"><input type="checkbox" name="invoice_ids[]" value="{{ $invoice->id }}" class="invoice-checkbox"></td>
                                         <td><strong>{{ $invoice->character->name ?? 'Unknown' }}</strong></td>
-                                        <td class="text-right"><strong>{{ number_format($invoice->amount, 2) }} ISK</strong></td>
+                                        <td class="text-right">
+                                            <strong>{{ number_format($invoice->amount, 0) }} ISK</strong>
+                                            @php
+                                                $meta = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
+                                                $appliedPayments = $meta['applied_payments'] ?? [];
+                                                $totalPaid = 0;
+                                                foreach ($appliedPayments as $p) { $totalPaid += ($p['amount'] ?? 0); }
+                                            @endphp
+                                            @if($totalPaid > 0)
+                                                <br><small class="text-green">{{ number_format($totalPaid, 0) }} ISK paid</small>
+                                            @endif
+                                        </td>
                                         <td>{{ $invoice->due_date->format('Y-m-d') }}</td>
                                         <td>
-                                            @if($invoice->due_date < now()) <span class="label label-danger">OVERDUE</span> @else <span class="label label-warning">SENT</span> @endif
+                                            @if($invoice->status === 'partial')
+                                                <span class="label label-info">PARTIAL</span>
+                                            @elseif($invoice->due_date < now())
+                                                <span class="label label-danger">OVERDUE</span>
+                                            @else
+                                                <span class="label label-warning">SENT</span>
+                                            @endif
                                         </td>
                                         <td class="text-right" style="padding-right: 20px;">
                                             <form method="POST" action="{{ route('alliancetax.invoices.mark-paid', $invoice->id) }}" style="display:inline;">
@@ -262,7 +279,7 @@
                                 @forelse($paidInvoices as $invoice)
                                 <tr>
                                     <td style="padding-left: 20px;">{{ $invoice->character->name ?? 'Unknown' }}</td>
-                                    <td class="text-right text-green"><strong>{{ number_format($invoice->amount, 2) }} ISK</strong></td>
+                                    <td class="text-right text-green"><strong>{{ number_format($invoice->amount, 0) }} ISK</strong></td>
                                     <td>{{ $invoice->paid_at ? $invoice->paid_at->format('Y-m-d') : 'N/A' }}</td>
                                     <td><span class="label label-success">COMPLETED</span></td>
                                     <td class="text-right" style="padding-right: 20px;">

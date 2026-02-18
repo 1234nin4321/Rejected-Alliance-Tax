@@ -36,7 +36,7 @@
                             <td>{{ \Carbon\Carbon::parse($tax->tax_period)->format('Y-m-d') }}</td>
                             <td class="text-right">{{ number_format($tax->total_mined_value, 0) }} ISK</td>
                             <td class="text-right">{{ number_format($tax->applicable_tax_rate, 2) }}%</td>
-                            <td class="text-right">{{ number_format($tax->tax_amount, 2) }} ISK</td>
+                            <td class="text-right">{{ number_format($tax->tax_amount, 0) }} ISK</td>
                             <td>
                                 @if($tax->status === 'paid')
                                     <span class="label label-success">Paid</span>
@@ -84,7 +84,7 @@
                                 {{ \Rejected\SeatAllianceTax\Services\OreNameTranslationService::translate($activity->type_name) }}
                             </td>
                             <td class="text-right">{{ number_format($activity->quantity) }}</td>
-                            <td class="text-right">{{ number_format($activity->estimated_value, 2) }} ISK</td>
+                            <td class="text-right">{{ number_format($activity->estimated_value, 0) }} ISK</td>
                         </tr>
                         @empty
                         <tr>
@@ -99,3 +99,4 @@
     </div>
 </div>
 @endsection
+

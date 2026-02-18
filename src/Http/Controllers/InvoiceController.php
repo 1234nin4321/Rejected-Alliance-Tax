@@ -319,7 +319,7 @@ class InvoiceController extends Controller
             }
 
             $charIdList = implode(', ', $userCharIds);
-            $diag[] = "<br>📌 <strong>{$charName}</strong> (ID:{$invoice->character_id}) — " . number_format($invoiceAmount, 2) . " ISK — Created: {$invoice->created_at}";
+            $diag[] = "<br>📌 <strong>{$charName}</strong> (ID:{$invoice->character_id}) — " . number_format($invoiceAmount, 0) . " ISK — Created: {$invoice->created_at}";
             $diag[] = "&nbsp;&nbsp;Owner chars: <code>[{$charIdList}]</code>" . (!$userId ? " ⚠️ No refresh_token!" : "");
 
             // Search for ANY positive transactions involving this user's characters
@@ -348,11 +348,11 @@ class InvoiceController extends Controller
 
                     $flags = [];
                     if ($isUsed) $flags[] = "⛔ already used by another invoice";
-                    if (!$amountOk) $flags[] = "💰 amount too low (" . number_format($txAmount, 2) . " < " . number_format($invoiceAmount, 2) . ")";
+                    if (!$amountOk) $flags[] = "💰 amount too low (" . number_format($txAmount, 0) . " < " . number_format($invoiceAmount, 0) . ")";
                     if (!$isUsed && $amountOk) $flags[] = "✅ should match — <strong>possible bug</strong>";
 
                     $refType = $row['ref_type'] ?? 'N/A';
-                    $diag[] = "&nbsp;&nbsp;&nbsp;&nbsp;• [{$row['date']}] id:<code>{$txId}</code> type:<code>{$refType}</code> amt:<code>" . number_format($txAmount, 2) . "</code> — " . implode(', ', $flags);
+                    $diag[] = "&nbsp;&nbsp;&nbsp;&nbsp;• [{$row['date']}] id:<code>{$txId}</code> type:<code>{$refType}</code> amt:<code>" . number_format($txAmount, 0) . "</code> — " . implode(', ', $flags);
                 }
             }
         }

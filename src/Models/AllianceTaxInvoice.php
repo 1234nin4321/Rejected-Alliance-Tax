@@ -28,7 +28,7 @@ class AllianceTaxInvoice extends Model
     protected $casts = [
         'invoice_date' => 'date',
         'due_date' => 'date',
-        'amount' => 'decimal:2',
+        'amount' => 'integer',
         'notified_at' => 'datetime',
         'paid_at' => 'datetime',
     ];
@@ -50,14 +50,14 @@ class AllianceTaxInvoice extends Model
 
     public function scopeUnpaid($query)
     {
-        return $query->where('status', 'sent');
+        return $query->whereIn('status', ['sent', 'partial']);
     }
 
     public function scopeOverdue($query)
     {
         return $query->where('status', 'overdue')
                      ->orWhere(function($q) {
-                         $q->where('status', 'sent')
+                         $q->whereIn('status', ['sent', 'partial'])
                            ->where('due_date', '<', now());
                      });
     }

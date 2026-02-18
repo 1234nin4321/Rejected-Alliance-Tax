@@ -47,13 +47,13 @@
                         <table class="table">
                             <tr>
                                 <th>Total Mined Value:</th>
-                                <td class="text-right">{{ number_format($tax->total_mined_value, 2) }} ISK</td>
+                                <td class="text-right">{{ number_format($tax->total_mined_value, 0) }} ISK</td>
                             </tr>
                             <tr class="info">
                                 <th>Tax Amount Owed:</th>
                                 <td class="text-right">
                                     <strong style="font-size: 18px;" class="text-danger">
-                                        {{ number_format($tax->tax_amount, 2) }} ISK
+                                        {{ number_format($tax->tax_amount, 0) }} ISK
                                     </strong>
                                 </td>
                             </tr>
@@ -136,21 +136,21 @@
                                 @endif
                             </td>
                             <td class="text-right">{{ number_format($activity->quantity) }}</td>
-                            <td class="text-right">{{ number_format($activity->estimated_value, 2) }} ISK</td>
+                            <td class="text-right">{{ number_format($activity->estimated_value, 0) }} ISK</td>
                             <td class="text-right">{{ number_format($taxRate, 2) }}%</td>
-                            <td class="text-right">{{ number_format($taxAmount, 2) }} ISK</td>
+                            <td class="text-right">{{ number_format($taxAmount, 0) }} ISK</td>
                         </tr>
                         @endforeach
                         <tr class="info">
                             <td colspan="5" class="text-right"><strong>Total:</strong></td>
                             <td class="text-right">
-                                <strong>{{ number_format($miningActivity->sum('estimated_value'), 2) }} ISK</strong>
+                                <strong>{{ number_format($miningActivity->sum('estimated_value'), 0) }} ISK</strong>
                             </td>
                             <td class="text-right">
                                 <strong>Avg: {{ number_format($tax->applicable_tax_rate, 2) }}%</strong>
                             </td>
                             <td class="text-right">
-                                <strong class="text-danger">{{ number_format($tax->tax_amount, 2) }} ISK</strong>
+                                <strong class="text-danger">{{ number_format($tax->tax_amount, 0) }} ISK</strong>
                             </td>
                         </tr>
                     </tbody>
@@ -162,3 +162,4 @@
 @endif
 
 @endsection
+

@@ -20,9 +20,8 @@ class ReconcilePaymentsJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
-     * The wallet journal table name and its actual column names
+     * The correct column name for the journal entry ID
      */
-    protected $journalTable;
     protected $idColumn = 'id';
 
     /**
@@ -42,19 +41,16 @@ class ReconcilePaymentsJob implements ShouldQueue
         Log::info("[AllianceTax] Starting payment reconciliation for corp {$taxCorpId}");
 
         // Detect table structure
-        $this->journalTable = (new CorporationWalletJournal)->getTable();
-        $columns = Schema::getColumnListing($this->journalTable);
-        
-        // The column is 'id' in this SeAT version (not 'ref_id')
+        $journalTable = (new CorporationWalletJournal)->getTable();
+        $columns = Schema::getColumnListing($journalTable);
         $this->idColumn = in_array('ref_id', $columns) ? 'ref_id' : 'id';
-        $hasRefType = in_array('ref_type', $columns);
 
-        Log::info("[AllianceTax] Journal table: {$this->journalTable}, ID column: {$this->idColumn}, has ref_type: " . ($hasRefType ? 'yes' : 'no'));
+        Log::info("[AllianceTax] Journal table: {$journalTable}, ID column: {$this->idColumn}");
 
-        // Look back 60 days for payments (extended to catch older payments)
+        // Look back 60 days for payments
         $since = Carbon::now()->subDays(60);
 
-        // Get unpaid invoices
+        // Get unpaid invoices (including partially paid ones)
         $unpaidInvoices = AllianceTaxInvoice::where('status', '!=', 'paid')
             ->with('character')
             ->get();
@@ -66,8 +62,9 @@ class ReconcilePaymentsJob implements ShouldQueue
 
         Log::info("[AllianceTax] Found {$unpaidInvoices->count()} unpaid invoices to check");
 
-        // Get all character IDs from unpaid invoices (and their alts) so we can search efficiently
+        // Collect ALL character IDs from unpaid invoices (and their alts)
         $allCharacterIds = [];
+        $invoiceCharMap = []; // invoice_id => [character_ids]
         foreach ($unpaidInvoices as $invoice) {
             $userId = DB::table('refresh_tokens')->where('character_id', $invoice->character_id)->value('user_id');
             if ($userId) {
@@ -76,16 +73,16 @@ class ReconcilePaymentsJob implements ShouldQueue
                     ->pluck('character_id')
                     ->map(function($id) { return (int)$id; })
                     ->toArray();
-                $allCharacterIds = array_merge($allCharacterIds, $charIds);
             } else {
-                $allCharacterIds[] = (int) $invoice->character_id;
+                $charIds = [(int) $invoice->character_id];
             }
+            $invoiceCharMap[$invoice->id] = $charIds;
+            $allCharacterIds = array_merge($allCharacterIds, $charIds);
         }
         $allCharacterIds = array_unique($allCharacterIds);
 
-        // Query wallet journal: get ALL positive transactions where any invoice character is a party
-        // This is much better than filtering by ref_type which may miss payment types
-        $transactions = DB::table($this->journalTable)
+        // Get all positive transactions where any invoice character is a party
+        $transactions = DB::table($journalTable)
             ->where('corporation_id', $taxCorpId)
             ->where('date', '>=', $since)
             ->where('amount', '>', 0)
@@ -93,161 +90,203 @@ class ReconcilePaymentsJob implements ShouldQueue
                 $query->whereIn('first_party_id', $allCharacterIds)
                       ->orWhereIn('second_party_id', $allCharacterIds);
             })
-            ->orderBy('date', 'desc')
+            ->orderBy('date', 'asc') // Process oldest first
             ->get();
 
         Log::info("[AllianceTax] Found {$transactions->count()} transactions from invoice characters");
 
-        // If no character-specific transactions found, also try with ref_type filter as fallback
-        if ($transactions->isEmpty() && $hasRefType) {
-            $transactions = DB::table($this->journalTable)
-                ->where('corporation_id', $taxCorpId)
-                ->where('date', '>=', $since)
-                ->where('amount', '>', 0)
-                ->whereIn('ref_type', [
-                    'player_donation',
-                    'player_trading',
-                    'corporation_account_withdrawal',
-                    'direct_transfer',
-                    'cash_out',
-                    'deposit',
-                    'union_payment',
-                ])
-                ->orderBy('date', 'desc')
-                ->get();
-            Log::info("[AllianceTax] Fallback: found {$transactions->count()} donation-type transactions");
-        }
-
         if ($transactions->isEmpty()) {
-            Log::info('[AllianceTax] No matching wallet transactions found at all');
+            Log::info('[AllianceTax] No matching wallet transactions found');
             return;
         }
 
-        $matched = 0;
-
-        // Load all already-used transaction IDs ONCE, then track in-memory
+        // Load all already-used transaction IDs
         $usedTxIds = AllianceTaxInvoice::whereNotNull('payment_ref_id')
             ->pluck('payment_ref_id')
-            ->map(function($id) { return (string) $id; })
             ->toArray();
+        
+        // Also load partial payment transaction IDs from metadata
+        foreach ($unpaidInvoices as $invoice) {
+            $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
+            $appliedPayments = $metadata['applied_payments'] ?? [];
+            foreach ($appliedPayments as $payment) {
+                $usedTxIds[] = (string) ($payment['tx_id'] ?? '');
+            }
+        }
+        $usedTxIds = array_unique(array_filter($usedTxIds));
+
+        $matched = 0;
+        $partialCount = 0;
 
         foreach ($unpaidInvoices as $invoice) {
-            $payment = $this->findMatchingPayment($invoice, $transactions, $usedTxIds);
+            $userCharIds = $invoiceCharMap[$invoice->id] ?? [(int)$invoice->character_id];
+            $invoiceAmount = (float) $invoice->amount;
+            $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
+            $appliedPayments = $metadata['applied_payments'] ?? [];
+            
+            // Calculate how much is still owed
+            $totalPaid = 0;
+            foreach ($appliedPayments as $payment) {
+                $totalPaid += (float) ($payment['amount'] ?? 0);
+            }
+            $remaining = $invoiceAmount - $totalPaid;
 
-            if ($payment) {
-                $txId = (string) ($payment->{$this->idColumn} ?? $payment->id ?? null);
+            if ($remaining <= 0) {
+                // Already fully paid through partials, mark as paid
+                $this->markInvoiceFullyPaid($invoice, $metadata);
+                $matched++;
+                continue;
+            }
+
+            // Find matching transactions for this invoice
+            foreach ($transactions as $tx) {
+                $row = (array) $tx;
+                $txId = (string) ($row[$this->idColumn] ?? $row['id'] ?? null);
+                
+                // Skip if already used
+                if (in_array($txId, $usedTxIds, true)) {
+                    continue;
+                }
+
+                // Check if character matches
+                $firstPartyId = (int) ($row['first_party_id'] ?? 0);
+                $secondPartyId = (int) ($row['second_party_id'] ?? 0);
+                $isFromUser = in_array($firstPartyId, $userCharIds, true) || 
+                              in_array($secondPartyId, $userCharIds, true);
+
+                if (!$isFromUser) {
+                    continue;
+                }
+
+                $txAmount = (float) ($row['amount'] ?? 0);
+                
+                // Claim this transaction
                 $usedTxIds[] = $txId;
 
-                $this->markInvoiceAsPaid($invoice, $payment, $txId);
-                $matched++;
-                Log::info("[AllianceTax] Matched payment for character {$invoice->character_id}: " 
-                    . number_format((float)$invoice->amount, 2) . " ISK (tx_id: {$txId})");
+                if ($txAmount >= $remaining) {
+                    // Full payment (or overpayment) — mark invoice as paid
+                    $overpaid = $txAmount - $remaining;
+                    
+                    // Record this payment
+                    $appliedPayments[] = [
+                        'tx_id' => $txId,
+                        'amount' => $remaining, // Only count what was needed
+                        'date' => $row['date'] ?? now()->toDateTimeString(),
+                        'ref_type' => $row['ref_type'] ?? 'unknown',
+                    ];
+                    $metadata['applied_payments'] = $appliedPayments;
+
+                    // Handle overpayment as credit
+                    if ($overpaid > 0) {
+                        $balance = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::firstOrCreate(
+                            ['character_id' => $invoice->character_id]
+                        );
+                        $balance->balance += $overpaid;
+                        $balance->save();
+                        $metadata['overpaid_amount'] = $overpaid;
+                        Log::info("[AllianceTax] Overpayment: " . number_format($overpaid, 0) . " ISK credited to character {$invoice->character_id}");
+                    }
+
+                    $invoice->status = 'paid';
+                    $invoice->paid_at = $row['date'] ?? now();
+                    $invoice->payment_ref_id = $txId;
+                    $invoice->metadata = json_encode($metadata);
+                    $invoice->save();
+
+                    // Mark related tax calculations as paid
+                    $this->markCalculationsPaid($invoice, $metadata, $row['date'] ?? now());
+
+                    $matched++;
+                    Log::info("[AllianceTax] Fully paid: character {$invoice->character_id}, " . number_format($invoiceAmount, 0) . " ISK (tx: {$txId})");
+                    break; // Move to next invoice
+
+                } else {
+                    // Partial payment — deduct from remaining and keep going
+                    $appliedPayments[] = [
+                        'tx_id' => $txId,
+                        'amount' => $txAmount,
+                        'date' => $row['date'] ?? now()->toDateTimeString(),
+                        'ref_type' => $row['ref_type'] ?? 'unknown',
+                    ];
+                    $remaining -= $txAmount;
+                    $partialCount++;
+
+                    Log::info("[AllianceTax] Partial payment: character {$invoice->character_id}, " 
+                        . number_format($txAmount, 0) . " ISK applied. Remaining: " . number_format($remaining, 0) . " ISK (tx: {$txId})");
+                    
+                    // Continue looking for more transactions for this invoice
+                }
+            }
+
+            // If we applied partial payments, update the invoice
+            if (count($appliedPayments) > count($metadata['applied_payments'] ?? [])) {
+                $metadata['applied_payments'] = $appliedPayments;
+                $invoice->metadata = json_encode($metadata);
+                
+                // Update the invoice amount to reflect remaining balance
+                $totalApplied = 0;
+                foreach ($appliedPayments as $p) {
+                    $totalApplied += (float) ($p['amount'] ?? 0);
+                }
+                $newRemaining = $invoiceAmount - $totalApplied;
+                
+                if ($newRemaining <= 0) {
+                    // Fully paid through multiple partials
+                    $invoice->status = 'paid';
+                    $invoice->paid_at = now();
+                    $invoice->payment_ref_id = $appliedPayments[count($appliedPayments) - 1]['tx_id'] ?? null;
+                    $invoice->save();
+                    $this->markCalculationsPaid($invoice, $metadata, now());
+                    $matched++;
+                    Log::info("[AllianceTax] Fully paid via partials: character {$invoice->character_id}");
+                } else {
+                    // Still partially unpaid — update amount to remaining
+                    $invoice->amount = floor($newRemaining);
+                    $invoice->status = 'partial';
+                    $invoice->save();
+                    Log::info("[AllianceTax] Partially paid: character {$invoice->character_id}, remaining: " . number_format($newRemaining, 0) . " ISK");
+                }
             }
         }
 
-        Log::info("[AllianceTax] Payment reconciliation complete. Matched {$matched} of {$unpaidInvoices->count()} unpaid invoices.");
+        Log::info("[AllianceTax] Reconciliation complete. Fully matched: {$matched}, Partial payments applied: {$partialCount}");
     }
 
     /**
-     * Find a matching payment for an invoice.
+     * Mark an invoice as fully paid (when partials add up)
      */
-    protected function findMatchingPayment($invoice, $transactions, array &$usedTxIds)
+    protected function markInvoiceFullyPaid($invoice, $metadata)
     {
-        // Get all characters owned by the user of this invoice
-        $userId = DB::table('refresh_tokens')->where('character_id', $invoice->character_id)->value('user_id');
-        
-        if (!$userId) {
-            $userCharacterIds = [(int) $invoice->character_id];
-        } else {
-            $userCharacterIds = DB::table('refresh_tokens')
-                ->where('user_id', $userId)
-                ->pluck('character_id')
-                ->map(function($id) { return (int)$id; })
-                ->toArray();
-        }
-
-        $invoiceAmount = (float) $invoice->amount;
-
-        foreach ($transactions as $tx) {
-            // Get the transaction ID using the correct column
-            $txId = (string) ($tx->{$this->idColumn} ?? $tx->id ?? null);
-            
-            // Skip if already used
-            if (in_array($txId, $usedTxIds, true)) {
-                continue;
-            }
-
-            // Check if character matches (any of user's characters)
-            $firstPartyId = (int) ($tx->first_party_id ?? 0);
-            $secondPartyId = (int) ($tx->second_party_id ?? 0);
-
-            $isFromUserCharacter = in_array($firstPartyId, $userCharacterIds, true) || 
-                                   in_array($secondPartyId, $userCharacterIds, true);
-
-            if (!$isFromUserCharacter) {
-                continue;
-            }
-
-            // Check if amount is sufficient (>= invoice amount)
-            $txAmount = (float) ($tx->amount ?? 0);
-            if ($txAmount >= $invoiceAmount) {
-                return $tx;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Mark invoice and related tax calculations as paid
-     */
-    protected function markInvoiceAsPaid($invoice, $transaction, $txId)
-    {
-        $invoiceAmount = (float) $invoice->amount;
-        $txAmount = (float) ($transaction->amount ?? 0);
-        
-        $overpaidAmount = 0;
-        if ($txAmount > $invoiceAmount) {
-            $overpaidAmount = $txAmount - $invoiceAmount;
-            
-            // Update character balance
-            $balance = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::firstOrCreate(['character_id' => $invoice->character_id]);
-            $balance->balance += $overpaidAmount;
-            $balance->save();
-            
-            Log::info("[AllianceTax] Overpayment detected: " . number_format($overpaidAmount, 2) . " ISK added to character {$invoice->character_id} balance.");
-        }
-
         $invoice->status = 'paid';
-        $invoice->paid_at = $transaction->date ?? now();
-        $invoice->payment_ref_id = $txId;
-        
-        // Preserve original metadata and add payment info
-        $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
-        $metadata['payment_transaction_id'] = $txId;
-        $metadata['payment_amount'] = $txAmount;
-        $metadata['overpaid_amount'] = $overpaidAmount;
+        $invoice->paid_at = now();
         $invoice->metadata = json_encode($metadata);
-        
         $invoice->save();
 
-        // Mark related tax calculation(s) as paid
+        $this->markCalculationsPaid($invoice, $metadata, now());
+    }
+
+    /**
+     * Mark related tax calculations as paid
+     */
+    protected function markCalculationsPaid($invoice, $metadata, $paidAt)
+    {
+        // Mark single linked calculation
         $calc = $invoice->taxCalculation;
         if ($calc) {
             $calc->status = 'paid';
             $calc->is_paid = true;
-            $calc->paid_at = $transaction->date ?? now();
+            $calc->paid_at = $paidAt;
             $calc->save();
         }
 
-        // If consolidated invoice, mark all related calculations
+        // Mark all consolidated calculation_ids
         if (isset($metadata['calculation_ids']) && is_array($metadata['calculation_ids'])) {
             DB::table('alliance_tax_calculations')
                 ->whereIn('id', $metadata['calculation_ids'])
                 ->update([
                     'status' => 'paid',
                     'is_paid' => true,
-                    'paid_at' => $transaction->date ?? now(),
+                    'paid_at' => $paidAt,
                 ]);
         }
     }
