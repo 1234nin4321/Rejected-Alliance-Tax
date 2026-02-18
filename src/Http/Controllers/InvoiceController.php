@@ -249,7 +249,7 @@ class InvoiceController extends Controller
     }
 
     /**
-     * Manually trigger payment reconciliation (runs synchronously for immediate feedback)
+     * Manually trigger payment reconciliation with diagnostic output
      */
     public function reconcile()
     {
@@ -260,23 +260,155 @@ class InvoiceController extends Controller
                 ->with('error', 'Cannot reconcile: No tax collection corporation configured. Please set it in Admin → Settings.');
         }
 
-        // Count unpaid invoices before reconciliation
+        $taxCorpId = (int) $taxCorpId;
+        $diagnostics = [];
+        $diagnostics[] = "🔧 <strong>Diagnostic Reconciliation Report</strong>";
+        $diagnostics[] = "Tax Corp ID: <code>{$taxCorpId}</code>";
+
+        // Check the wallet journal table structure
+        $journalModel = new \Seat\Eveapi\Models\Wallet\CorporationWalletJournal;
+        $table = $journalModel->getTable();
+        $columns = \Illuminate\Support\Facades\Schema::getColumnListing($table);
+        $diagnostics[] = "Wallet table: <code>{$table}</code>";
+        $diagnostics[] = "Columns: <code>" . implode(', ', $columns) . "</code>";
+
+        $hasRefType = in_array('ref_type', $columns);
+        $hasRefTypeId = in_array('ref_type_id', $columns);
+        $diagnostics[] = "Has ref_type: " . ($hasRefType ? '✅' : '❌') . " | Has ref_type_id: " . ($hasRefTypeId ? '✅' : '❌');
+
+        // Check how many journal entries exist for this corp
+        $since = \Carbon\Carbon::now()->subDays(30);
+        $totalForCorp = \Illuminate\Support\Facades\DB::table($table)
+            ->where('corporation_id', $taxCorpId)
+            ->count();
+        $recentForCorp = \Illuminate\Support\Facades\DB::table($table)
+            ->where('corporation_id', $taxCorpId)
+            ->where('date', '>=', $since)
+            ->count();
+        $positiveRecent = \Illuminate\Support\Facades\DB::table($table)
+            ->where('corporation_id', $taxCorpId)
+            ->where('date', '>=', $since)
+            ->where('amount', '>', 0)
+            ->count();
+        $diagnostics[] = "Journal entries for corp: total=<strong>{$totalForCorp}</strong> last30d=<strong>{$recentForCorp}</strong> positive(last30d)=<strong>{$positiveRecent}</strong>";
+
+        // If NO entries for corp, check if table has data at all
+        if ($totalForCorp === 0) {
+            $totalAny = \Illuminate\Support\Facades\DB::table($table)->count();
+            $diagnostics[] = "⚠️ <strong>Zero entries found for corp {$taxCorpId}!</strong> Total entries in table: {$totalAny}";
+            
+            // Show distinct corp IDs in the table
+            $corpIds = \Illuminate\Support\Facades\DB::table($table)
+                ->select('corporation_id')
+                ->distinct()
+                ->take(10)
+                ->pluck('corporation_id')
+                ->toArray();
+            $diagnostics[] = "Corp IDs in table: <code>" . implode(', ', $corpIds) . "</code>";
+        }
+
+        // Show sample incoming transactions
+        $sampleTx = \Illuminate\Support\Facades\DB::table($table)
+            ->where('corporation_id', $taxCorpId)
+            ->where('date', '>=', $since)
+            ->where('amount', '>', 0)
+            ->orderBy('date', 'desc')
+            ->take(10)
+            ->get();
+
+        if ($sampleTx->isNotEmpty()) {
+            $diagnostics[] = "<br><strong>📋 Recent incoming transactions (up to 10):</strong>";
+            foreach ($sampleTx as $tx) {
+                $refType = $hasRefType ? ($tx->ref_type ?? 'NULL') : ($hasRefTypeId ? ($tx->ref_type_id ?? 'NULL') : 'N/A');
+                $diagnostics[] = "&nbsp;&nbsp;• [{$tx->date}] ref_id:<code>{$tx->ref_id}</code> type:<code>{$refType}</code> amount:<code>" 
+                    . number_format((float)$tx->amount, 2) . "</code> 1st:<code>{$tx->first_party_id}</code> 2nd:<code>{$tx->second_party_id}</code>";
+            }
+        } else {
+            $diagnostics[] = "⚠️ <strong>No positive-amount transactions found for corp {$taxCorpId} in the last 30 days!</strong>";
+        }
+
+        // Show unpaid invoices with character matching info
+        $unpaidInvoices = AllianceTaxInvoice::where('status', '!=', 'paid')
+            ->with('character')
+            ->get();
+
+        $usedRefIds = AllianceTaxInvoice::whereNotNull('payment_ref_id')
+            ->pluck('payment_ref_id')
+            ->toArray();
+
+        $diagnostics[] = "<br><strong>📄 Unpaid invoices: {$unpaidInvoices->count()}</strong> | Already-used ref_ids: " . count($usedRefIds);
+
+        foreach ($unpaidInvoices->take(10) as $invoice) {
+            $charName = optional($invoice->character)->name ?? 'Unknown';
+            $invoiceAmount = (float) $invoice->amount;
+
+            // Find user's characters
+            $userId = \Illuminate\Support\Facades\DB::table('refresh_tokens')
+                ->where('character_id', $invoice->character_id)
+                ->value('user_id');
+            
+            if ($userId) {
+                $userCharacterIds = \Illuminate\Support\Facades\DB::table('refresh_tokens')
+                    ->where('user_id', $userId)
+                    ->pluck('character_id')
+                    ->map(function($id) { return (int)$id; })
+                    ->toArray();
+            } else {
+                $userCharacterIds = [(int)$invoice->character_id];
+                $diagnostics[] = "&nbsp;&nbsp;⚠️ No refresh_token for char {$invoice->character_id}!";
+            }
+
+            $charIdList = implode(', ', $userCharacterIds);
+            $comparisonDate = \Carbon\Carbon::parse($invoice->created_at)->subMinutes(5);
+
+            $diagnostics[] = "&nbsp;&nbsp;📌 <strong>{$charName}</strong> (ID:{$invoice->character_id}) — " 
+                . number_format($invoiceAmount, 2) . " ISK — Created: {$invoice->created_at} — Owner chars: <code>[{$charIdList}]</code>";
+
+            // Check each sample tx against this invoice
+            if ($sampleTx->isNotEmpty()) {
+                $foundCandidate = false;
+                foreach ($sampleTx as $tx) {
+                    $isUsed = in_array($tx->ref_id, $usedRefIds);
+                    $firstParty = (int) $tx->first_party_id;
+                    $secondParty = (int) $tx->second_party_id;
+                    $txAmount = (float) $tx->amount;
+                    $charMatch = in_array($firstParty, $userCharacterIds, true) || in_array($secondParty, $userCharacterIds, true);
+                    $amountOk = $txAmount >= $invoiceAmount;
+                    $dateOk = \Carbon\Carbon::parse($tx->date) >= $comparisonDate;
+
+                    // Only show if it's at least a partial match
+                    if ($charMatch || ($amountOk && !$isUsed)) {
+                        $foundCandidate = true;
+                        $flags = [];
+                        if ($isUsed) $flags[] = "used:❌";
+                        $flags[] = "char:" . ($charMatch ? '✅' : "❌({$firstParty},{$secondParty})");
+                        $flags[] = "amt:" . ($amountOk ? '✅' : "❌(" . number_format($txAmount,2) . "<" . number_format($invoiceAmount,2) . ")");
+                        $flags[] = "date:" . ($dateOk ? '✅' : "❌({$tx->date}<{$comparisonDate})");
+                        $allOk = $charMatch && $amountOk && $dateOk && !$isUsed;
+                        $icon = $allOk ? '✅' : '❌';
+                        $diagnostics[] = "&nbsp;&nbsp;&nbsp;&nbsp;{$icon} ref:<code>{$tx->ref_id}</code> " . implode(' | ', $flags);
+                    }
+                }
+                if (!$foundCandidate) {
+                    $diagnostics[] = "&nbsp;&nbsp;&nbsp;&nbsp;↳ No candidate transactions found at all for this character";
+                }
+            }
+        }
+
+        // Now run the actual reconciliation
         $unpaidBefore = AllianceTaxInvoice::where('status', '!=', 'paid')->count();
 
-        // Run the job synchronously so the user gets immediate feedback
         $job = new \Rejected\SeatAllianceTax\Jobs\ReconcilePaymentsJob();
         $job->handle();
 
-        // Count unpaid invoices after reconciliation
         $unpaidAfter = AllianceTaxInvoice::where('status', '!=', 'paid')->count();
         $matched = $unpaidBefore - $unpaidAfter;
 
-        if ($matched > 0) {
-            return redirect()->route('alliancetax.invoices.index')
-                ->with('success', "Payment reconciliation complete! Matched {$matched} invoice(s) to wallet transactions.");
-        }
+        $diagnostics[] = "<br><strong>📊 Result: Matched {$matched} invoice(s). Remaining unpaid: {$unpaidAfter}</strong>";
+
+        $message = implode('<br>', $diagnostics);
 
         return redirect()->route('alliancetax.invoices.index')
-            ->with('info', 'Payment reconciliation complete. No new matches found — all wallet transactions have already been processed or no matching payments were detected.');
+            ->with($matched > 0 ? 'success' : 'info', $message);
     }
 }
