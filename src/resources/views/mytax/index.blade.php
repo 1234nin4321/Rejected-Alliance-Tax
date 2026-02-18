@@ -7,7 +7,7 @@
 
 <div class="row">
     <!-- Tax Summary -->
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="box box-danger">
             <div class="box-header with-border">
                 <h3 class="box-title"><i class="fa fa-exclamation-circle"></i> Taxes Pending</h3>
@@ -29,7 +29,36 @@
         </div>
     </div>
 
-    <div class="col-md-4">
+    <div class="col-md-3">
+        <div class="box" style="border-top: 3px solid #f39c12;">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-calculator"></i> Estimated Tax</h3>
+            </div>
+            <div class="box-body">
+                @if($taxEstimate['has_estimate'])
+                    <h3 style="color: #f39c12;">
+                        <strong>~{{ number_format($taxEstimate['net_estimated_tax'], 2) }} ISK</strong>
+                    </h3>
+                    <p class="text-muted">
+                        <small>{{ $taxEstimate['period_label'] }} (not yet invoiced)</small>
+                    </p>
+                @else
+                    <h3 class="text-muted">
+                        <strong>0.00 ISK</strong>
+                    </h3>
+                    <p class="text-muted">
+                        @if(($taxEstimate['reason'] ?? '') === 'already_invoiced')
+                            <small>Current period already invoiced</small>
+                        @else
+                            <small>No mining activity this period</small>
+                        @endif
+                    </p>
+                @endif
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3">
         <div class="box box-info">
             <div class="box-header with-border">
                 <h3 class="box-title"><i class="fa fa-money"></i> Overpaid / Tax Credit</h3>
@@ -45,7 +74,7 @@
         </div>
     </div>
 
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="box box-success">
             <div class="box-header with-border">
                 <h3 class="box-title"><i class="fa fa-check"></i> Taxes Paid (3 Months)</h3>
@@ -78,6 +107,84 @@
         </div>
     </div>
 </div>
+
+<!-- Tax Estimate Breakdown -->
+@if($taxEstimate['has_estimate'])
+<div class="row">
+    <div class="col-xs-12">
+        <div class="box" style="border-top: 3px solid #f39c12;">
+            <div class="box-header with-border">
+                <h3 class="box-title">
+                    <i class="fa fa-calculator"></i>
+                    Estimated Tax — {{ $taxEstimate['period_label'] }}
+                </h3>
+                <span class="label pull-right" style="background-color: #f39c12; font-size: 12px;">NOT YET INVOICED</span>
+            </div>
+            <div class="box-body">
+                <div class="callout" style="background-color: #fcf8e3 !important; border-left: 5px solid #f39c12 !important; color: #8a6d3b !important;">
+                    <i class="fa fa-info-circle"></i>
+                    This is an <strong>estimate</strong> based on your mining activity so far this {{ $taxEstimate['period_type'] === 'monthly' ? 'month' : 'week' }}.
+                    The final tax may differ once the period ends and the invoice is generated.
+                </div>
+
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Character</th>
+                            <th class="text-right">Mining Sessions</th>
+                            <th class="text-right">Mined Value</th>
+                            <th class="text-right">Estimated Tax</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach($taxEstimate['character_breakdown'] as $charEstimate)
+                        <tr>
+                            <td>
+                                {!! img('characters', 'portrait', $charEstimate['character_id'], 32, ['class' => 'img-circle eve-icon small-icon']) !!}
+                                {{ $charEstimate['character_name'] }}
+                            </td>
+                            <td class="text-right">{{ number_format($charEstimate['sessions']) }}</td>
+                            <td class="text-right">{{ number_format($charEstimate['mined_value'], 2) }} ISK</td>
+                            <td class="text-right" style="color: #f39c12;">
+                                <strong>~{{ number_format($charEstimate['estimated_tax'], 2) }} ISK</strong>
+                            </td>
+                        </tr>
+                        @endforeach
+
+                        <tr style="border-top: 2px solid #f39c12;">
+                            <td colspan="2" class="text-right"><strong>Totals:</strong></td>
+                            <td class="text-right">
+                                <strong>{{ number_format($taxEstimate['total_mined_value'], 2) }} ISK</strong>
+                            </td>
+                            <td class="text-right" style="color: #f39c12;">
+                                <strong>~{{ number_format($taxEstimate['total_estimated_tax'], 2) }} ISK</strong>
+                            </td>
+                        </tr>
+
+                        @if($taxEstimate['credit_applicable'] > 0)
+                        <tr>
+                            <td colspan="3" class="text-right text-info"><strong>Tax Credit to Apply:</strong></td>
+                            <td class="text-right text-info">
+                                <strong>-{{ number_format($taxEstimate['credit_applicable'], 2) }} ISK</strong>
+                            </td>
+                        </tr>
+                        @endif
+
+                        <tr class="info">
+                            <td colspan="3" class="text-right"><strong>Estimated Net Tax Owed:</strong></td>
+                            <td class="text-right">
+                                <strong style="font-size: 16px; color: #f39c12;">
+                                    ~{{ number_format($taxEstimate['net_estimated_tax'], 2) }} ISK
+                                </strong>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+@endif
 
 <!-- Pending Taxes by Character -->
 @if($pendingTaxes->isNotEmpty())
@@ -229,7 +336,7 @@
 </div>
 @endif
 
-@if($pendingTaxes->isEmpty() && $paidTaxes->isEmpty() && $recentActivity->isEmpty())
+@if($pendingTaxes->isEmpty() && $paidTaxes->isEmpty() && $recentActivity->isEmpty() && !$taxEstimate['has_estimate'])
 <div class="row">
     <div class="col-xs-12">
         <div class="box box-default">

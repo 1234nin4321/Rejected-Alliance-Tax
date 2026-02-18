@@ -4,8 +4,13 @@ namespace Rejected\SeatAllianceTax\Http\Controllers;
 
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 use Rejected\SeatAllianceTax\Models\AllianceTaxCalculation;
 use Rejected\SeatAllianceTax\Models\AllianceMiningActivity;
+use Rejected\SeatAllianceTax\Models\AllianceTaxRate;
+use Rejected\SeatAllianceTax\Models\AllianceTaxSetting;
+use Rejected\SeatAllianceTax\Models\AllianceTaxSystem;
+use Rejected\SeatAllianceTax\Helpers\OreCategory;
 
 class MyTaxController extends Controller
 {
@@ -76,6 +81,9 @@ class MyTaxController extends Controller
         $taxCorpId = \Rejected\SeatAllianceTax\Models\AllianceTaxSetting::get('tax_collection_corporation_id');
         $taxCorp = $taxCorpId ? \Seat\Eveapi\Models\Corporation\CorporationInfo::where('corporation_id', $taxCorpId)->first() : null;
 
+        // === TAX ESTIMATE for current uninvoiced period ===
+        $taxEstimate = $this->calculateTaxEstimate($characterIds);
+
         return view('alliancetax::mytax.index', compact(
             'pendingTaxes',
             'paidTaxes',
@@ -84,7 +92,8 @@ class MyTaxController extends Controller
             'totalBalance',
             'taxCorp',
             'recentActivity',
-            'miningSummary'
+            'miningSummary',
+            'taxEstimate'
         ));
     }
 
@@ -208,5 +217,173 @@ class MyTaxController extends Controller
         });
         
         return view('alliancetax::mytax.details', compact('tax', 'miningActivity'));
+    }
+
+    /**
+     * Calculate an estimated tax for the current uninvoiced period.
+     * This looks at mining activity that hasn't been invoiced yet and
+     * applies the current tax rates to give players a preview.
+     *
+     * @param \Illuminate\Support\Collection $characterIds
+     * @return array
+     */
+    protected function calculateTaxEstimate($characterIds)
+    {
+        $periodType = AllianceTaxSetting::get('tax_period', 'weekly');
+        $allianceId = AllianceTaxSetting::get('alliance_id');
+
+        // Determine the current period boundaries
+        $now = Carbon::now();
+        if ($periodType === 'monthly') {
+            $periodStart = $now->copy()->startOfMonth();
+            $periodEnd = $now->copy()->endOfMonth();
+            $periodLabel = $periodStart->format('F Y');
+        } else {
+            // Weekly — current week (Monday to Sunday)
+            $periodStart = $now->copy()->startOfWeek(Carbon::MONDAY);
+            $periodEnd = $now->copy()->endOfWeek(Carbon::SUNDAY);
+            $periodLabel = $periodStart->format('M d') . ' - ' . $periodEnd->format('M d, Y');
+        }
+
+        // Check if this period has already been invoiced for the user
+        $alreadyInvoiced = AllianceTaxCalculation::whereIn('character_id', $characterIds)
+            ->where('tax_period', $periodStart->format('Y-m-d'))
+            ->whereIn('status', ['sent', 'paid'])
+            ->exists();
+
+        if ($alreadyInvoiced) {
+            return [
+                'has_estimate' => false,
+                'reason' => 'already_invoiced',
+                'period_label' => $periodLabel,
+            ];
+        }
+
+        // Get mining activity for the current period across all user characters
+        $activities = AllianceMiningActivity::whereIn('character_id', $characterIds)
+            ->whereBetween('mining_date', [$periodStart, $periodEnd])
+            ->with('character')
+            ->get();
+
+        // Apply system restrictions
+        $taxedSystemIds = AllianceTaxSystem::pluck('solar_system_id')->toArray();
+        if (!empty($taxedSystemIds)) {
+            $activities = $activities->filter(function ($activity) use ($taxedSystemIds) {
+                return in_array($activity->solar_system_id, $taxedSystemIds);
+            });
+        }
+
+        if ($activities->isEmpty()) {
+            return [
+                'has_estimate' => false,
+                'reason' => 'no_activity',
+                'period_label' => $periodLabel,
+            ];
+        }
+
+        // Load all active tax rates once
+        $allRates = AllianceTaxRate::where('is_active', true)->get();
+        $defaultRate = AllianceTaxSetting::get('default_tax_rate', 10);
+
+        $totalMinedValue = 0;
+        $totalEstimatedTax = 0;
+        $characterBreakdown = [];
+
+        foreach ($activities as $activity) {
+            $category = OreCategory::getCategoryForTypeId($activity->type_id);
+
+            // Skip Gas mined in Wormholes
+            if ($category === 'gas' && $activity->solar_system_id >= 31000000 && $activity->solar_system_id < 32000000) {
+                continue;
+            }
+
+            // Determine tax rate using the same hierarchy as TaxCalculationService
+            $taxRate = $this->getEstimateTaxRate($allRates, $activity->corporation_id, $allianceId, $category, $defaultRate);
+
+            $activityValue = (float) $activity->estimated_value;
+            $activityTax = $activityValue * ($taxRate / 100);
+
+            $totalMinedValue += $activityValue;
+            $totalEstimatedTax += $activityTax;
+
+            // Build per-character breakdown
+            $charId = $activity->character_id;
+            if (!isset($characterBreakdown[$charId])) {
+                $characterBreakdown[$charId] = [
+                    'character_id' => $charId,
+                    'character_name' => optional($activity->character)->name ?? 'Character ' . $charId,
+                    'mined_value' => 0,
+                    'estimated_tax' => 0,
+                    'sessions' => 0,
+                ];
+            }
+
+            $characterBreakdown[$charId]['mined_value'] += $activityValue;
+            $characterBreakdown[$charId]['estimated_tax'] += $activityTax;
+            $characterBreakdown[$charId]['sessions']++;
+        }
+
+        // Apply credit balance
+        $totalCredit = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::whereIn('character_id', $characterIds)
+            ->sum('balance');
+        $creditApplicable = min((float) $totalCredit, $totalEstimatedTax);
+        $netEstimatedTax = $totalEstimatedTax - $creditApplicable;
+
+        return [
+            'has_estimate' => true,
+            'period_label' => $periodLabel,
+            'period_type' => $periodType,
+            'period_start' => $periodStart,
+            'period_end' => $periodEnd,
+            'total_mined_value' => $totalMinedValue,
+            'total_estimated_tax' => $totalEstimatedTax,
+            'credit_applicable' => $creditApplicable,
+            'net_estimated_tax' => $netEstimatedTax,
+            'character_breakdown' => array_values($characterBreakdown),
+        ];
+    }
+
+    /**
+     * Get the applicable tax rate for an activity, mirroring TaxCalculationService logic.
+     * Hierarchy: Corp Category > Corp All > Alliance Category > Alliance All > Default
+     */
+    protected function getEstimateTaxRate($allRates, $corporationId, $allianceId, $category, $defaultRate)
+    {
+        $now = Carbon::now();
+
+        // 1. Corp + Category specific
+        $rate = $allRates->where('corporation_id', $corporationId)
+            ->where('item_category', $category)
+            ->filter(function ($r) use ($now) {
+                return $r->effective_from <= $now && (!$r->effective_until || $r->effective_until >= $now);
+            })->first();
+        if ($rate) return $rate->tax_rate;
+
+        // 2. Corp + All
+        $rate = $allRates->where('corporation_id', $corporationId)
+            ->where('item_category', 'all')
+            ->filter(function ($r) use ($now) {
+                return $r->effective_from <= $now && (!$r->effective_until || $r->effective_until >= $now);
+            })->first();
+        if ($rate) return $rate->tax_rate;
+
+        // 3. Alliance + Category specific
+        $rate = $allRates->where('alliance_id', $allianceId)
+            ->where('item_category', $category)
+            ->filter(function ($r) use ($now) {
+                return $r->effective_from <= $now && (!$r->effective_until || $r->effective_until >= $now);
+            })->first();
+        if ($rate) return $rate->tax_rate;
+
+        // 4. Alliance + All
+        $rate = $allRates->where('alliance_id', $allianceId)
+            ->where('item_category', 'all')
+            ->filter(function ($r) use ($now) {
+                return $r->effective_from <= $now && (!$r->effective_until || $r->effective_until >= $now);
+            })->first();
+        if ($rate) return $rate->tax_rate;
+
+        // 5. Default
+        return $defaultRate;
     }
 }
