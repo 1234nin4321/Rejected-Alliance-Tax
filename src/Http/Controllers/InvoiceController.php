@@ -247,4 +247,36 @@ class InvoiceController extends Controller
         return redirect()->route('alliancetax.invoices.index')
             ->with('success', "Deleted {$count} invoices and reset related calculations.");
     }
+
+    /**
+     * Manually trigger payment reconciliation (runs synchronously for immediate feedback)
+     */
+    public function reconcile()
+    {
+        $taxCorpId = AllianceTaxSetting::get('tax_collection_corporation_id');
+
+        if (!$taxCorpId) {
+            return redirect()->route('alliancetax.invoices.index')
+                ->with('error', 'Cannot reconcile: No tax collection corporation configured. Please set it in Admin → Settings.');
+        }
+
+        // Count unpaid invoices before reconciliation
+        $unpaidBefore = AllianceTaxInvoice::where('status', '!=', 'paid')->count();
+
+        // Run the job synchronously so the user gets immediate feedback
+        $job = new \Rejected\SeatAllianceTax\Jobs\ReconcilePaymentsJob();
+        $job->handle();
+
+        // Count unpaid invoices after reconciliation
+        $unpaidAfter = AllianceTaxInvoice::where('status', '!=', 'paid')->count();
+        $matched = $unpaidBefore - $unpaidAfter;
+
+        if ($matched > 0) {
+            return redirect()->route('alliancetax.invoices.index')
+                ->with('success', "Payment reconciliation complete! Matched {$matched} invoice(s) to wallet transactions.");
+        }
+
+        return redirect()->route('alliancetax.invoices.index')
+            ->with('info', 'Payment reconciliation complete. No new matches found — all wallet transactions have already been processed or no matching payments were detected.');
+    }
 }
