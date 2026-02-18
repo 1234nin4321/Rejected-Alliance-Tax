@@ -77,7 +77,14 @@ class DiagnoseMiningTax extends Command
             if ($isKept) $keptCount += $row->count;
             else $droppedCount += $row->count;
 
-            $sysName = DB::table('mapSolarSystems')->where('solarSystemID', $sysId)->value('solarSystemName') ?? $sysId;
+            try {
+                $sysName = DB::table('mapDenormalize')
+                    ->where('itemID', $sysId)
+                    ->value('itemName') ?? $sysId;
+            } catch (\Exception $e) {
+                // SDE table might be missing or different schema
+                $sysName = $sysId;
+            }
 
             $this->line("   System {$sysName} [{$sysId}]: {$row->count} records -> {$status}");
         }
