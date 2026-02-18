@@ -274,6 +274,7 @@
                                 <th>Status</th>
                                 <th>Issued</th>
                                 <th>Paid</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -292,9 +293,7 @@
                             @endphp
                             <tr>
                                 <td>
-                                    <a href="{{ route('alliancetax.mytax.invoice', $invoice->id) }}">
-                                        <code>#{{ $invoice->id }}</code>
-                                    </a>
+                                    <code>#{{ $invoice->id }}</code>
                                 </td>
                                 <td>
                                     {!! img('characters', 'portrait', $invoice->character_id, 32, ['class' => 'img-circle eve-icon small-icon']) !!}
@@ -354,6 +353,11 @@
                                     @else
                                         <small class="text-muted">—</small>
                                     @endif
+                                </td>
+                                <td>
+                                    <a href="{{ route('alliancetax.mytax.invoice', $invoice->id) }}" class="btn btn-xs btn-info">
+                                        <i class="fa fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                             @endforeach
