@@ -4,6 +4,7 @@ namespace Rejected\SeatAllianceTax\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 use Rejected\SeatAllianceTax\Models\AllianceTaxInvoice;
 use Rejected\SeatAllianceTax\Models\AllianceTaxSetting;
@@ -27,6 +28,9 @@ class ReconcilePayments extends Command
             return 1;
         }
 
+        // Ensure corporation_id is compared as an integer to avoid type mismatch
+        $taxCorpId = (int) $taxCorpId;
+
         $this->info("Tax Collection Corp: {$taxCorpId}");
 
         $daysBack = $this->option('days');
@@ -44,20 +48,26 @@ class ReconcilePayments extends Command
 
         $this->info("Found {$unpaidInvoices->count()} unpaid invoices");
 
+        // Determine the correct ref_type column name (SeAT version compatibility)
+        $refTypeColumn = $this->getRefTypeColumn();
+
         // Get wallet journal entries (player donations/transfers)
-        $transactions = CorporationWalletJournal::where('corporation_id', $taxCorpId)
+        $query = CorporationWalletJournal::where('corporation_id', $taxCorpId)
             ->where('date', '>=', $since)
-            ->whereIn('ref_type', [
+            ->where('amount', '>', 0); // Incoming only
+
+        if ($refTypeColumn) {
+            $query->whereIn($refTypeColumn, [
                 'player_donation', 
                 'corporation_account_withdrawal', 
                 'direct_transfer', 
                 'cash_out',
                 'deposit',
-                'union_payment'
-            ])
-            ->where('amount', '>', 0) // Incoming only
-            ->orderBy('date', 'desc')
-            ->get();
+                'union_payment',
+            ]);
+        }
+
+        $transactions = $query->orderBy('date', 'desc')->get();
 
         $this->info("Checking {$transactions->count()} wallet transactions since {$since->toDateTimeString()}...");
         
@@ -72,16 +82,25 @@ class ReconcilePayments extends Command
         $bar = $this->output->createProgressBar($unpaidInvoices->count());
         $bar->start();
 
+        // Load all already-used transaction ref_ids ONCE, then track in-memory
+        // This prevents the same transaction being matched to multiple invoices
+        $usedRefIds = AllianceTaxInvoice::whereNotNull('payment_ref_id')
+            ->pluck('payment_ref_id')
+            ->toArray();
+
         foreach ($unpaidInvoices as $invoice) {
             // Look for matching transaction
-            $payment = $this->findMatchingPayment($invoice, $transactions);
+            $payment = $this->findMatchingPayment($invoice, $transactions, $usedRefIds);
 
             if ($payment) {
+                // Immediately claim this ref_id so no other invoice can use it
+                $usedRefIds[] = $payment->ref_id;
+
                 $this->markInvoiceAsPaid($invoice, $payment);
                 $matched++;
                 $this->newLine();
                 $characterName = $invoice->character ? $invoice->character->name : $invoice->character_id;
-                $this->info("✓ Matched payment for {$characterName}: " . number_format($invoice->amount, 2) . " ISK");
+                $this->info("✓ Matched payment for {$characterName}: " . number_format($invoice->amount, 2) . " ISK (ref_id: {$payment->ref_id})");
             }
 
             $bar->advance();
@@ -95,9 +114,14 @@ class ReconcilePayments extends Command
     }
 
     /**
-     * Find a matching payment for an invoice
+     * Find a matching payment for an invoice.
+     * 
+     * @param AllianceTaxInvoice $invoice
+     * @param \Illuminate\Support\Collection $transactions
+     * @param array $usedRefIds Already-claimed transaction ref_ids (passed by reference from caller)
+     * @return object|null
      */
-    protected function findMatchingPayment($invoice, $transactions)
+    protected function findMatchingPayment($invoice, $transactions, array &$usedRefIds)
     {
         // Get all characters owned by the user of this invoice
         $userId = DB::table('refresh_tokens')->where('character_id', $invoice->character_id)->value('user_id');
@@ -112,33 +136,39 @@ class ReconcilePayments extends Command
                 ->toArray();
         }
 
-        // Get all transaction IDs already used for payments to avoid duplicates
-        $usedRefIds = AllianceTaxInvoice::whereNotNull('payment_ref_id')
-            ->pluck('payment_ref_id')
-            ->toArray();
+        // Ensure character IDs are integers for reliable comparison
+        $userCharacterIds = array_map('intval', $userCharacterIds);
+
+        // Cast invoice amount to float to avoid string comparison issues
+        $invoiceAmount = (float) $invoice->amount;
 
         foreach ($transactions as $tx) {
             // Skip if this transaction has already been used to pay an invoice
+            // (either from a previous run or earlier in this run)
             if (in_array($tx->ref_id, $usedRefIds)) {
                 continue;
             }
 
             // Check if character matches (first_party_id or second_party_id)
-            $isFromUserCharacter = in_array($tx->first_party_id, $userCharacterIds) || 
-                                   in_array($tx->second_party_id, $userCharacterIds);
+            $firstPartyId = (int) $tx->first_party_id;
+            $secondPartyId = (int) $tx->second_party_id;
+
+            $isFromUserCharacter = in_array($firstPartyId, $userCharacterIds, true) || 
+                                   in_array($secondPartyId, $userCharacterIds, true);
 
             if (!$isFromUserCharacter) {
                 continue;
             }
 
             // Check if amount matches (minimum is invoice amount)
-            // We allow overpayments
-            if ($tx->amount >= $invoice->amount) {
+            // Cast to float for reliable numeric comparison
+            $txAmount = (float) $tx->amount;
+            if ($txAmount >= $invoiceAmount) {
                 // Check if transaction is after invoice creation
-                // We allow a 1-minute buffer in case of slight time sync differences
-                $comparisonDate = Carbon::parse($invoice->created_at)->subMinute();
+                // We allow a 5-minute buffer for ESI sync differences
+                $comparisonDate = Carbon::parse($invoice->created_at)->subMinutes(5);
                 
-                if ($tx->date >= $comparisonDate) {
+                if (Carbon::parse($tx->date) >= $comparisonDate) {
                     return $tx;
                 }
             }
@@ -152,9 +182,12 @@ class ReconcilePayments extends Command
      */
     protected function markInvoiceAsPaid($invoice, $transaction)
     {
+        $invoiceAmount = (float) $invoice->amount;
+        $txAmount = (float) $transaction->amount;
+        
         $overpaidAmount = 0;
-        if ($transaction->amount > $invoice->amount) {
-            $overpaidAmount = $transaction->amount - $invoice->amount;
+        if ($txAmount > $invoiceAmount) {
+            $overpaidAmount = $txAmount - $invoiceAmount;
             
             // Update character balance
             $balance = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::firstOrCreate(['character_id' => $invoice->character_id]);
@@ -196,5 +229,27 @@ class ReconcilePayments extends Command
                     'paid_at' => $transaction->date,
                 ]);
         }
+    }
+
+    /**
+     * Determine the correct ref_type column name.
+     * SeAT versions differ - some use 'ref_type' (string), others 'ref_type_id' (int).
+     * 
+     * @return string|null
+     */
+    protected function getRefTypeColumn()
+    {
+        $table = (new CorporationWalletJournal)->getTable();
+
+        if (Schema::hasColumn($table, 'ref_type')) {
+            return 'ref_type';
+        }
+
+        if (Schema::hasColumn($table, 'ref_type_id')) {
+            $this->warn('Using ref_type_id column - skipping ref_type filter for broader matching');
+            return null;
+        }
+
+        return 'ref_type';
     }
 }
