@@ -44,7 +44,7 @@ class SeatAllianceTaxServiceProvider extends AbstractSeatPlugin
             $schedule = $this->app->make(\Illuminate\Console\Scheduling\Schedule::class);
             
             // Reconcile payments every 10 minutes
-            $schedule->command('alliancetax:reconcile')->everyTenMinutes();
+            $schedule->job(new \Rejected\SeatAllianceTax\Jobs\ReconcilePaymentsJob)->everyTenMinutes();
 
             // Refresh Jita prices every hour
             $schedule->command('alliancetax:refresh-prices')->hourly();
