@@ -49,6 +49,9 @@ class SeatAllianceTaxServiceProvider extends AbstractSeatPlugin
             // Refresh Jita prices every hour
             $schedule->command('alliancetax:refresh-prices')->hourly();
 
+            // Sync recent mining data for estimates every 15 minutes
+            $schedule->command('alliancetax:sync-mining')->everyFifteenMinutes();
+
             // Calculate taxes weekly on Mondays at 01:00
             // This will trigger automated invoice generation if enabled in settings
             $schedule->command('alliancetax:calculate')->weeklyOn(1, '01:00');
@@ -75,6 +78,7 @@ class SeatAllianceTaxServiceProvider extends AbstractSeatPlugin
 
         // Register commands
         $this->commands([
+            \Rejected\SeatAllianceTax\Console\Commands\SyncMiningData::class,
             \Rejected\SeatAllianceTax\Commands\CalculateAllianceTax::class,
             \Rejected\SeatAllianceTax\Commands\ReconcilePayments::class,
             \Rejected\SeatAllianceTax\Commands\RefreshJitaPrices::class,
