@@ -292,7 +292,9 @@
                             @endphp
                             <tr>
                                 <td>
-                                    <code>#{{ $invoice->id }}</code>
+                                    <a href="{{ route('alliancetax.mytax.invoice', $invoice->id) }}">
+                                        <code>#{{ $invoice->id }}</code>
+                                    </a>
                                 </td>
                                 <td>
                                     {!! img('characters', 'portrait', $invoice->character_id, 32, ['class' => 'img-circle eve-icon small-icon']) !!}
