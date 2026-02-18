@@ -272,42 +272,38 @@ class InvoiceController extends Controller
         $diagnostics[] = "Wallet table: <code>{$table}</code>";
         $diagnostics[] = "Columns: <code>" . implode(', ', $columns) . "</code>";
 
+        // Detect the right ID/ref column name
+        $refIdCol = in_array('ref_id', $columns) ? 'ref_id' : (in_array('id', $columns) ? 'id' : null);
+        $diagnostics[] = "Ref ID column detected: <code>" . ($refIdCol ?? 'NONE') . "</code>";
+
         $hasRefType = in_array('ref_type', $columns);
-        $hasRefTypeId = in_array('ref_type_id', $columns);
-        $diagnostics[] = "Has ref_type: " . ($hasRefType ? '✅' : '❌') . " | Has ref_type_id: " . ($hasRefTypeId ? '✅' : '❌');
+        $diagnostics[] = "Has ref_type column: " . ($hasRefType ? '✅' : '❌');
 
         // Check how many journal entries exist for this corp
         $since = \Carbon\Carbon::now()->subDays(30);
         $totalForCorp = \Illuminate\Support\Facades\DB::table($table)
             ->where('corporation_id', $taxCorpId)
             ->count();
-        $recentForCorp = \Illuminate\Support\Facades\DB::table($table)
-            ->where('corporation_id', $taxCorpId)
-            ->where('date', '>=', $since)
-            ->count();
         $positiveRecent = \Illuminate\Support\Facades\DB::table($table)
             ->where('corporation_id', $taxCorpId)
             ->where('date', '>=', $since)
             ->where('amount', '>', 0)
             ->count();
-        $diagnostics[] = "Journal entries for corp: total=<strong>{$totalForCorp}</strong> last30d=<strong>{$recentForCorp}</strong> positive(last30d)=<strong>{$positiveRecent}</strong>";
+        $diagnostics[] = "Journal entries: total=<strong>{$totalForCorp}</strong> positive(last30d)=<strong>{$positiveRecent}</strong>";
 
-        // If NO entries for corp, check if table has data at all
+        // If NO entries for corp, check what corps exist
         if ($totalForCorp === 0) {
             $totalAny = \Illuminate\Support\Facades\DB::table($table)->count();
-            $diagnostics[] = "⚠️ <strong>Zero entries found for corp {$taxCorpId}!</strong> Total entries in table: {$totalAny}";
-            
-            // Show distinct corp IDs in the table
             $corpIds = \Illuminate\Support\Facades\DB::table($table)
                 ->select('corporation_id')
                 ->distinct()
                 ->take(10)
                 ->pluck('corporation_id')
                 ->toArray();
-            $diagnostics[] = "Corp IDs in table: <code>" . implode(', ', $corpIds) . "</code>";
+            $diagnostics[] = "⚠️ <strong>Zero entries for corp {$taxCorpId}!</strong> Total rows: {$totalAny}. Corps in table: <code>" . implode(', ', $corpIds) . "</code>";
         }
 
-        // Show sample incoming transactions
+        // Show sample incoming transactions - dump ALL properties of first one
         $sampleTx = \Illuminate\Support\Facades\DB::table($table)
             ->where('corporation_id', $taxCorpId)
             ->where('date', '>=', $since)
@@ -317,17 +313,30 @@ class InvoiceController extends Controller
             ->get();
 
         if ($sampleTx->isNotEmpty()) {
-            $diagnostics[] = "<br><strong>📋 Recent incoming transactions (up to 10):</strong>";
+            // Dump the FULL first row so we can see all column names and values
+            $firstRow = (array) $sampleTx->first();
+            $diagnostics[] = "<br><strong>📋 First transaction (full dump):</strong>";
+            foreach ($firstRow as $col => $val) {
+                $displayVal = is_null($val) ? '<em>NULL</em>' : htmlspecialchars(substr((string)$val, 0, 80));
+                $diagnostics[] = "&nbsp;&nbsp;<code>{$col}</code> = <code>{$displayVal}</code>";
+            }
+
+            $diagnostics[] = "<br><strong>📋 Recent incoming transactions ({$sampleTx->count()}):</strong>";
             foreach ($sampleTx as $tx) {
-                $refType = $hasRefType ? ($tx->ref_type ?? 'NULL') : ($hasRefTypeId ? ($tx->ref_type_id ?? 'NULL') : 'N/A');
-                $diagnostics[] = "&nbsp;&nbsp;• [{$tx->date}] ref_id:<code>{$tx->ref_id}</code> type:<code>{$refType}</code> amount:<code>" 
-                    . number_format((float)$tx->amount, 2) . "</code> 1st:<code>{$tx->first_party_id}</code> 2nd:<code>{$tx->second_party_id}</code>";
+                $row = (array) $tx;
+                $txId = $row[$refIdCol] ?? $row['id'] ?? 'N/A';
+                $refType = $row['ref_type'] ?? $row['ref_type_id'] ?? 'N/A';
+                $amount = number_format((float)($row['amount'] ?? 0), 2);
+                $party1 = $row['first_party_id'] ?? 'N/A';
+                $party2 = $row['second_party_id'] ?? 'N/A';
+                $date = $row['date'] ?? 'N/A';
+                $diagnostics[] = "&nbsp;&nbsp;• [{$date}] id:<code>{$txId}</code> type:<code>{$refType}</code> amt:<code>{$amount}</code> 1st:<code>{$party1}</code> 2nd:<code>{$party2}</code>";
             }
         } else {
             $diagnostics[] = "⚠️ <strong>No positive-amount transactions found for corp {$taxCorpId} in the last 30 days!</strong>";
         }
 
-        // Show unpaid invoices with character matching info
+        // Show unpaid invoices
         $unpaidInvoices = AllianceTaxInvoice::where('status', '!=', 'paid')
             ->with('character')
             ->get();
@@ -342,11 +351,10 @@ class InvoiceController extends Controller
             $charName = optional($invoice->character)->name ?? 'Unknown';
             $invoiceAmount = (float) $invoice->amount;
 
-            // Find user's characters
             $userId = \Illuminate\Support\Facades\DB::table('refresh_tokens')
                 ->where('character_id', $invoice->character_id)
                 ->value('user_id');
-            
+
             if ($userId) {
                 $userCharacterIds = \Illuminate\Support\Facades\DB::table('refresh_tokens')
                     ->where('user_id', $userId)
@@ -361,54 +369,47 @@ class InvoiceController extends Controller
             $charIdList = implode(', ', $userCharacterIds);
             $comparisonDate = \Carbon\Carbon::parse($invoice->created_at)->subMinutes(5);
 
-            $diagnostics[] = "&nbsp;&nbsp;📌 <strong>{$charName}</strong> (ID:{$invoice->character_id}) — " 
-                . number_format($invoiceAmount, 2) . " ISK — Created: {$invoice->created_at} — Owner chars: <code>[{$charIdList}]</code>";
+            $diagnostics[] = "&nbsp;&nbsp;📌 <strong>{$charName}</strong> (ID:{$invoice->character_id}) — "
+                . number_format($invoiceAmount, 2) . " ISK — Created: {$invoice->created_at} — Chars: <code>[{$charIdList}]</code>";
 
-            // Check each sample tx against this invoice
+            // Try matching against transactions
             if ($sampleTx->isNotEmpty()) {
                 $foundCandidate = false;
                 foreach ($sampleTx as $tx) {
-                    $isUsed = in_array($tx->ref_id, $usedRefIds);
-                    $firstParty = (int) $tx->first_party_id;
-                    $secondParty = (int) $tx->second_party_id;
-                    $txAmount = (float) $tx->amount;
+                    $row = (array) $tx;
+                    $txRefId = $row[$refIdCol] ?? $row['id'] ?? null;
+                    $isUsed = in_array($txRefId, $usedRefIds);
+                    $firstParty = (int) ($row['first_party_id'] ?? 0);
+                    $secondParty = (int) ($row['second_party_id'] ?? 0);
+                    $txAmount = (float) ($row['amount'] ?? 0);
                     $charMatch = in_array($firstParty, $userCharacterIds, true) || in_array($secondParty, $userCharacterIds, true);
                     $amountOk = $txAmount >= $invoiceAmount;
-                    $dateOk = \Carbon\Carbon::parse($tx->date) >= $comparisonDate;
+                    $dateOk = \Carbon\Carbon::parse($row['date'] ?? '2000-01-01') >= $comparisonDate;
 
-                    // Only show if it's at least a partial match
                     if ($charMatch || ($amountOk && !$isUsed)) {
                         $foundCandidate = true;
                         $flags = [];
                         if ($isUsed) $flags[] = "used:❌";
                         $flags[] = "char:" . ($charMatch ? '✅' : "❌({$firstParty},{$secondParty})");
                         $flags[] = "amt:" . ($amountOk ? '✅' : "❌(" . number_format($txAmount,2) . "<" . number_format($invoiceAmount,2) . ")");
-                        $flags[] = "date:" . ($dateOk ? '✅' : "❌({$tx->date}<{$comparisonDate})");
+                        $flags[] = "date:" . ($dateOk ? '✅' : "❌");
                         $allOk = $charMatch && $amountOk && $dateOk && !$isUsed;
                         $icon = $allOk ? '✅' : '❌';
-                        $diagnostics[] = "&nbsp;&nbsp;&nbsp;&nbsp;{$icon} ref:<code>{$tx->ref_id}</code> " . implode(' | ', $flags);
+                        $diagnostics[] = "&nbsp;&nbsp;&nbsp;&nbsp;{$icon} id:<code>{$txRefId}</code> " . implode(' | ', $flags);
                     }
                 }
                 if (!$foundCandidate) {
-                    $diagnostics[] = "&nbsp;&nbsp;&nbsp;&nbsp;↳ No candidate transactions found at all for this character";
+                    $diagnostics[] = "&nbsp;&nbsp;&nbsp;&nbsp;↳ No matching transactions for this character";
                 }
             }
         }
 
-        // Now run the actual reconciliation
-        $unpaidBefore = AllianceTaxInvoice::where('status', '!=', 'paid')->count();
-
-        $job = new \Rejected\SeatAllianceTax\Jobs\ReconcilePaymentsJob();
-        $job->handle();
-
-        $unpaidAfter = AllianceTaxInvoice::where('status', '!=', 'paid')->count();
-        $matched = $unpaidBefore - $unpaidAfter;
-
-        $diagnostics[] = "<br><strong>📊 Result: Matched {$matched} invoice(s). Remaining unpaid: {$unpaidAfter}</strong>";
+        // Skip running the actual reconcile job for now since it has the same ref_id bug
+        $diagnostics[] = "<br><strong>📊 Reconciliation skipped — diagnostics only. Fix will be applied based on column names above.</strong>";
 
         $message = implode('<br>', $diagnostics);
 
         return redirect()->route('alliancetax.invoices.index')
-            ->with($matched > 0 ? 'success' : 'info', $message);
+            ->with('info', $message);
     }
 }
