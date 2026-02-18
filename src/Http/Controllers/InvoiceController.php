@@ -260,6 +260,10 @@ class InvoiceController extends Controller
                 ->with('error', 'Cannot reconcile: No tax collection corporation configured. Please set it in Admin → Settings.');
         }
 
+        $taxCorpId = (int) $taxCorpId;
+        $debug = request()->has('debug');
+
+        // Run reconciliation
         $unpaidBefore = AllianceTaxInvoice::where('status', '!=', 'paid')->count();
 
         $job = new \Rejected\SeatAllianceTax\Jobs\ReconcilePaymentsJob();
@@ -268,13 +272,94 @@ class InvoiceController extends Controller
         $unpaidAfter = AllianceTaxInvoice::where('status', '!=', 'paid')->count();
         $matched = $unpaidBefore - $unpaidAfter;
 
-        if ($matched > 0) {
+        if (!$debug) {
+            if ($matched > 0) {
+                return redirect()->route('alliancetax.invoices.index')
+                    ->with('success', "Payment reconciliation complete! Matched {$matched} invoice(s) to wallet transactions.");
+            }
             return redirect()->route('alliancetax.invoices.index')
-                ->with('success', "Payment reconciliation complete! Matched {$matched} invoice(s) to wallet transactions.");
+                ->with('info', 'Payment reconciliation complete. No new payment matches found.');
         }
 
+        // === DEBUG MODE: Show why remaining invoices didn't match ===
+        $diag = [];
+        $diag[] = "📊 <strong>Reconciliation Result: Matched {$matched}, Remaining unpaid: {$unpaidAfter}</strong>";
+
+        $journalTable = (new \Seat\Eveapi\Models\Wallet\CorporationWalletJournal)->getTable();
+        $since = \Carbon\Carbon::now()->subDays(60);
+
+        // Get remaining unpaid invoices
+        $stillUnpaid = AllianceTaxInvoice::where('status', '!=', 'paid')
+            ->with('character')
+            ->get();
+
+        $usedTxIds = AllianceTaxInvoice::whereNotNull('payment_ref_id')
+            ->pluck('payment_ref_id')
+            ->map(function($id) { return (string) $id; })
+            ->toArray();
+        $diag[] = "Already-used transaction IDs: " . count($usedTxIds);
+
+        foreach ($stillUnpaid as $invoice) {
+            $charName = optional($invoice->character)->name ?? 'Unknown';
+            $invoiceAmount = (float) $invoice->amount;
+
+            // Get user's character IDs
+            $userId = \Illuminate\Support\Facades\DB::table('refresh_tokens')
+                ->where('character_id', $invoice->character_id)
+                ->value('user_id');
+
+            if ($userId) {
+                $userCharIds = \Illuminate\Support\Facades\DB::table('refresh_tokens')
+                    ->where('user_id', $userId)
+                    ->pluck('character_id')
+                    ->map(function($id) { return (int)$id; })
+                    ->toArray();
+            } else {
+                $userCharIds = [(int)$invoice->character_id];
+            }
+
+            $charIdList = implode(', ', $userCharIds);
+            $diag[] = "<br>📌 <strong>{$charName}</strong> (ID:{$invoice->character_id}) — " . number_format($invoiceAmount, 2) . " ISK — Created: {$invoice->created_at}";
+            $diag[] = "&nbsp;&nbsp;Owner chars: <code>[{$charIdList}]</code>" . (!$userId ? " ⚠️ No refresh_token!" : "");
+
+            // Search for ANY positive transactions involving this user's characters
+            $charTx = \Illuminate\Support\Facades\DB::table($journalTable)
+                ->where('corporation_id', $taxCorpId)
+                ->where('amount', '>', 0)
+                ->where(function($q) use ($userCharIds) {
+                    $q->whereIn('first_party_id', $userCharIds)
+                      ->orWhereIn('second_party_id', $userCharIds);
+                })
+                ->orderBy('date', 'desc')
+                ->take(5)
+                ->get();
+
+            if ($charTx->isEmpty()) {
+                $diag[] = "&nbsp;&nbsp;❌ <strong>No wallet transactions found involving any of this user's characters!</strong>";
+                $diag[] = "&nbsp;&nbsp;&nbsp;&nbsp;This means the payment either hasn't been synced from ESI, was made from an unlinked alt, or hasn't been made yet.";
+            } else {
+                $diag[] = "&nbsp;&nbsp;Found {$charTx->count()} transaction(s) from this user:";
+                foreach ($charTx as $tx) {
+                    $row = (array) $tx;
+                    $txId = (string) $row['id'];
+                    $txAmount = (float) $row['amount'];
+                    $isUsed = in_array($txId, $usedTxIds, true);
+                    $amountOk = $txAmount >= $invoiceAmount;
+
+                    $flags = [];
+                    if ($isUsed) $flags[] = "⛔ already used by another invoice";
+                    if (!$amountOk) $flags[] = "💰 amount too low (" . number_format($txAmount, 2) . " < " . number_format($invoiceAmount, 2) . ")";
+                    if (!$isUsed && $amountOk) $flags[] = "✅ should match — <strong>possible bug</strong>";
+
+                    $refType = $row['ref_type'] ?? 'N/A';
+                    $diag[] = "&nbsp;&nbsp;&nbsp;&nbsp;• [{$row['date']}] id:<code>{$txId}</code> type:<code>{$refType}</code> amt:<code>" . number_format($txAmount, 2) . "</code> — " . implode(', ', $flags);
+                }
+            }
+        }
+
+        $message = implode('<br>', $diag);
         return redirect()->route('alliancetax.invoices.index')
-            ->with('info', 'Payment reconciliation complete. No new payment matches found.');
+            ->with($matched > 0 ? 'success' : 'info', $message);
     }
 }
 

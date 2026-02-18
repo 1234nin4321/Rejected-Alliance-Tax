@@ -118,7 +118,7 @@ Route::group([
             'as' => 'alliancetax.invoices.destroy',
             'uses' => 'InvoiceController@destroy',
         ]);
-        Route::post('/reconcile', [
+        Route::match(['get', 'post'], '/reconcile', [
             'as' => 'alliancetax.invoices.reconcile',
             'uses' => 'InvoiceController@reconcile',
         ]);
