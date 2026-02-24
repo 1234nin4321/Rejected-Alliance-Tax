@@ -4,6 +4,7 @@ namespace Rejected\SeatAllianceTax\Jobs;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -191,7 +192,15 @@ class ReconcilePaymentsJob implements ShouldQueue
                     $invoice->paid_at = $row['date'] ?? now();
                     $invoice->payment_ref_id = $txId;
                     $invoice->metadata = json_encode($metadata);
-                    $invoice->save();
+
+                    try {
+                        $invoice->save();
+                    } catch (UniqueConstraintViolationException $e) {
+                        // Same transaction already assigned to another invoice — store ref in metadata only
+                        Log::warning("[AllianceTax] payment_ref_id {$txId} already used on another invoice, saving without it");
+                        $invoice->payment_ref_id = null;
+                        $invoice->save();
+                    }
 
                     // Mark related tax calculations as paid
                     $this->markCalculationsPaid($invoice, $metadata, $row['date'] ?? now());
@@ -235,7 +244,14 @@ class ReconcilePaymentsJob implements ShouldQueue
                     $invoice->status = 'paid';
                     $invoice->paid_at = now();
                     $invoice->payment_ref_id = $appliedPayments[count($appliedPayments) - 1]['tx_id'] ?? null;
-                    $invoice->save();
+
+                    try {
+                        $invoice->save();
+                    } catch (UniqueConstraintViolationException $e) {
+                        Log::warning("[AllianceTax] payment_ref_id already used on another invoice (partials), saving without it");
+                        $invoice->payment_ref_id = null;
+                        $invoice->save();
+                    }
                     $this->markCalculationsPaid($invoice, $metadata, now());
                     $matched++;
                     Log::info("[AllianceTax] Fully paid via partials: character {$invoice->character_id}");
