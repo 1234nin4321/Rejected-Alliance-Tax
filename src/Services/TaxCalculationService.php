@@ -218,7 +218,9 @@ class TaxCalculationService
             $effectiveRate = $totalValue > 0 ? ($totalTaxAmount / $totalValue) * 100 : 0;
             $periodType = AllianceTaxSetting::get('tax_period', 'weekly');
             
-            // Apply tax credit if character has balance
+            // Read current credit balance for display/record purposes only
+            // Credits are managed authoritatively by CreditRecalculationService
+            // We do NOT deduct from the balance here to prevent double-deduction on recalculation
             $balanceModel = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::firstOrCreate(['character_id' => $mainCharacterId]);
             $creditToApply = 0;
             $finalTaxAmount = $totalTaxAmount;
@@ -226,10 +228,8 @@ class TaxCalculationService
             if ($balanceModel->balance > 0) {
                 $creditToApply = min($balanceModel->balance, $totalTaxAmount);
                 $finalTaxAmount = $totalTaxAmount - $creditToApply;
-                
-                // Update balance
-                $balanceModel->balance -= $creditToApply;
-                $balanceModel->save();
+                // Note: balance is NOT deducted here — it will be recalculated
+                // from source of truth (total sent vs total invoiced) after reconciliation
             }
 
             // Check if record exists and its current status

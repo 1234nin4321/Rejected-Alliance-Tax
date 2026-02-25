@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 use Rejected\SeatAllianceTax\Models\AllianceTaxInvoice;
 use Rejected\SeatAllianceTax\Models\AllianceTaxSetting;
+use Rejected\SeatAllianceTax\Services\CreditRecalculationService;
 use Seat\Eveapi\Models\Wallet\CorporationWalletJournal;
 
 class ReconcilePayments extends Command
@@ -110,6 +111,15 @@ class ReconcilePayments extends Command
         $this->newLine(2);
         $this->info("✅ Reconciliation complete! Matched {$matched} payments.");
 
+        // Recalculate all credit balances from source of truth
+        $this->info('Recalculating credit balances...');
+        try {
+            CreditRecalculationService::recalculate();
+            $this->info('✅ Credit balances recalculated.');
+        } catch (\Exception $e) {
+            $this->error('Failed to recalculate credits: ' . $e->getMessage());
+        }
+
         return 0;
     }
 
@@ -188,13 +198,9 @@ class ReconcilePayments extends Command
         $overpaidAmount = 0;
         if ($txAmount > $invoiceAmount) {
             $overpaidAmount = $txAmount - $invoiceAmount;
-            
-            // Update character balance
-            $balance = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::firstOrCreate(['character_id' => $invoice->character_id]);
-            $balance->balance += $overpaidAmount;
-            $balance->save();
-            
-            $this->info("  ! Overpayment detected: " . number_format($overpaidAmount, 2) . " ISK added to character balance.");
+            // Note: credits are recalculated authoritatively after reconciliation
+            // No incremental balance updates here
+            $this->info("  ! Overpayment detected: " . number_format($overpaidAmount, 2) . " ISK (will be applied during credit recalculation)");
         }
 
         $invoice->status = 'paid';

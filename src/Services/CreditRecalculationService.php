@@ -1,87 +1,87 @@
 <?php
 
-namespace Rejected\SeatAllianceTax\Console\Commands;
+namespace Rejected\SeatAllianceTax\Services;
 
-use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Rejected\SeatAllianceTax\Models\AllianceTaxInvoice;
 use Rejected\SeatAllianceTax\Models\AllianceTaxBalance;
 use Rejected\SeatAllianceTax\Models\AllianceTaxSetting;
-use Rejected\SeatAllianceTax\Services\CreditRecalculationService;
 use Seat\Eveapi\Models\Wallet\CorporationWalletJournal;
 
-class RecalculateCredits extends Command
+/**
+ * Authoritatively recalculates tax credit balances from the source of truth:
+ *   Credit = Total ISK sent to tax corp - Total ISK invoiced
+ *
+ * This is the ONLY place that should set balance values.
+ * No other code should increment/decrement AllianceTaxBalance directly.
+ */
+class CreditRecalculationService
 {
-    protected $signature = 'alliancetax:recalculate-credits {--dry-run : Show what would change without saving}';
-    protected $description = 'Recalculate tax credit balances by comparing total ISK sent vs total invoiced per user';
-
-    public function handle()
+    /**
+     * Recalculate all credit balances from source of truth.
+     *
+     * @return array Summary of recalculation results
+     */
+    public static function recalculate(): array
     {
-        $dryRun = $this->option('dry-run');
-        
-        if ($dryRun) {
-            $this->warn('DRY RUN — no changes will be saved.');
-        }
-
         $taxCorpId = (int) AllianceTaxSetting::get('tax_collection_corporation_id');
         if (!$taxCorpId) {
-            $this->error('No tax collection corporation configured!');
-            return 1;
+            Log::info('[AllianceTax] Credit recalculation skipped — no tax collection corp configured');
+            return ['users_with_credit' => 0, 'total_credit' => 0];
         }
-
-        $this->info("Tax Collection Corp: {$taxCorpId}");
 
         // Detect ref_type column
         $journalTable = (new CorporationWalletJournal)->getTable();
         $columns = Schema::getColumnListing($journalTable);
         $refTypeColumn = in_array('ref_type', $columns) ? 'ref_type' : null;
 
-        // Get all invoices grouped by user
+        // Find all unique character_ids that have invoices
         $invoiceCharacters = AllianceTaxInvoice::select('character_id')
             ->distinct()
             ->pluck('character_id');
-
-        $this->info("Found invoices for " . $invoiceCharacters->count() . " characters.");
 
         $creditsByCharacter = [];
         $totalCreditsApplied = 0;
 
         foreach ($invoiceCharacters as $charId) {
             $userId = DB::table('refresh_tokens')->where('character_id', $charId)->value('user_id');
-            
             if (!$userId) {
-                $this->line("  ⚠ Character {$charId}: no user found, skipping");
                 continue;
             }
 
+            // Get ALL characters for this user
             $userCharIds = DB::table('refresh_tokens')
                 ->where('user_id', $userId)
                 ->pluck('character_id')
                 ->map(fn($id) => (int) $id)
                 ->toArray();
 
+            // Skip if we already processed this user (via another character)
             $userKey = 'user_' . $userId;
             if (isset($creditsByCharacter[$userKey])) {
                 continue;
             }
 
+            // Get the main character
             $mainCharId = DB::table('users')->where('id', $userId)->value('main_character_id') ?? $charId;
-            $charName = DB::table('character_infos')->where('character_id', $mainCharId)->value('name') ?? "Character {$mainCharId}";
 
             // 1. Calculate TOTAL invoiced for this user (original amounts)
             $invoices = AllianceTaxInvoice::whereIn('character_id', $userCharIds)->get();
-            
+
             $totalInvoiced = 0;
             foreach ($invoices as $invoice) {
                 $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
                 $appliedPayments = $metadata['applied_payments'] ?? [];
-                
+
+                // Reconstruct original invoice amount
                 $partialTotal = 0;
                 foreach ($appliedPayments as $p) {
                     $partialTotal += (float)($p['amount'] ?? 0);
                 }
-                
+
+                // Original amount = current remaining + all partial payments applied
                 $originalAmount = (float)$invoice->amount + $partialTotal;
                 $totalInvoiced += $originalAmount;
             }
@@ -108,58 +108,41 @@ class RecalculateCredits extends Command
 
             $totalSent = (float) $txQuery->sum('amount');
 
-            // 3. Credit = Total Sent - Total Invoiced
+            // 3. Credit = Total Sent - Total Invoiced (only if positive and > 1 ISK)
             $credit = $totalSent - $totalInvoiced;
-
-            $this->line(
-                "  {$charName}: Sent " . number_format($totalSent, 0) . 
-                " ISK, Invoiced " . number_format($totalInvoiced, 0) . 
-                " ISK → " . ($credit > 0 ? "Credit: " . number_format($credit, 0) . " ISK" : "No credit")
-            );
 
             if ($credit > 1) {
                 $creditsByCharacter[$userKey] = [
                     'character_id' => $mainCharId,
-                    'character_name' => $charName,
                     'credit' => floor($credit),
                 ];
                 $totalCreditsApplied += floor($credit);
             } else {
                 $creditsByCharacter[$userKey] = [
                     'character_id' => $mainCharId,
-                    'character_name' => $charName,
                     'credit' => 0,
                 ];
             }
         }
 
-        // Reset and apply
-        if (!$dryRun) {
-            // Use the service for the actual reset
-            $result = CreditRecalculationService::recalculate();
-        }
+        // Reset ALL balances to 0, then apply calculated credits
+        AllianceTaxBalance::query()->update(['balance' => 0]);
 
-        $usersWithCredit = collect($creditsByCharacter)->filter(fn($d) => $d['credit'] > 0);
-
-        $this->newLine();
-        $this->info("Summary:");
-        $this->info("  Users with credit: " . $usersWithCredit->count());
-        $this->info("  Total credit: " . number_format($totalCreditsApplied, 0) . " ISK");
-
-        if ($usersWithCredit->isNotEmpty()) {
-            $this->newLine();
-            $this->info("Credit Breakdown:");
-            foreach ($usersWithCredit as $data) {
-                $this->info("  ✅ {$data['character_name']}: " . number_format($data['credit'], 0) . " ISK");
+        foreach ($creditsByCharacter as $data) {
+            if ($data['credit'] > 0) {
+                $balance = AllianceTaxBalance::firstOrCreate(['character_id' => $data['character_id']]);
+                $balance->balance = $data['credit'];
+                $balance->save();
             }
         }
-        
-        if ($dryRun) {
-            $this->warn("\nNo changes saved (dry run). Run without --dry-run to apply.");
-        } else {
-            $this->info("\n✅ Credits applied successfully.");
-        }
 
-        return 0;
+        $usersWithCredit = collect($creditsByCharacter)->filter(fn($d) => $d['credit'] > 0)->count();
+
+        Log::info("[AllianceTax] Credit recalculation complete: {$usersWithCredit} users with credit, total: " . number_format($totalCreditsApplied, 0) . " ISK");
+
+        return [
+            'users_with_credit' => $usersWithCredit,
+            'total_credit' => $totalCreditsApplied,
+        ];
     }
 }

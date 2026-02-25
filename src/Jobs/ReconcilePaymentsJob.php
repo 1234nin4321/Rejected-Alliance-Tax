@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 use Rejected\SeatAllianceTax\Models\AllianceTaxInvoice;
 use Rejected\SeatAllianceTax\Models\AllianceTaxSetting;
+use Rejected\SeatAllianceTax\Services\CreditRecalculationService;
 use Seat\Eveapi\Models\Wallet\CorporationWalletJournal;
 
 class ReconcilePaymentsJob implements ShouldQueue
@@ -160,6 +161,14 @@ class ReconcilePaymentsJob implements ShouldQueue
                 }
 
                 $txAmount = (float) ($row['amount'] ?? 0);
+
+                // Only match transactions that occurred after the invoice was created
+                // (with a 5-minute buffer for ESI sync timing differences)
+                $txDate = Carbon::parse($row['date'] ?? now());
+                $invoiceCreated = Carbon::parse($invoice->created_at)->subMinutes(5);
+                if ($txDate < $invoiceCreated) {
+                    continue;
+                }
                 
                 // Claim this transaction
                 $usedTxIds[] = $txId;
@@ -177,15 +186,10 @@ class ReconcilePaymentsJob implements ShouldQueue
                     ];
                     $metadata['applied_payments'] = $appliedPayments;
 
-                    // Handle overpayment as credit
+                    // Note overpayment in metadata (credits are recalculated authoritatively after reconciliation)
                     if ($overpaid > 0) {
-                        $balance = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::firstOrCreate(
-                            ['character_id' => $invoice->character_id]
-                        );
-                        $balance->balance += $overpaid;
-                        $balance->save();
                         $metadata['overpaid_amount'] = $overpaid;
-                        Log::info("[AllianceTax] Overpayment: " . number_format($overpaid, 0) . " ISK credited to character {$invoice->character_id}");
+                        Log::info("[AllianceTax] Overpayment detected: " . number_format($overpaid, 0) . " ISK for character {$invoice->character_id} (will be applied during credit recalculation)");
                     }
 
                     $invoice->status = 'paid';
@@ -266,6 +270,15 @@ class ReconcilePaymentsJob implements ShouldQueue
         }
 
         Log::info("[AllianceTax] Reconciliation complete. Fully matched: {$matched}, Partial payments applied: {$partialCount}");
+
+        // Recalculate all credit balances from source of truth (total sent vs total invoiced)
+        // This prevents credits from accumulating incorrectly across repeated runs
+        try {
+            CreditRecalculationService::recalculate();
+            Log::info('[AllianceTax] Credit balances recalculated after reconciliation');
+        } catch (\Exception $e) {
+            Log::error('[AllianceTax] Failed to recalculate credits: ' . $e->getMessage());
+        }
     }
 
     /**
