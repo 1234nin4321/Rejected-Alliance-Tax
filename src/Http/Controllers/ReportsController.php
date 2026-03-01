@@ -88,6 +88,7 @@ class ReportsController extends Controller
             'gas' => 0,
         ];
 
+
         foreach ($activities as $activity) {
             $category = $this->getItemCategory($activity->type_id);
             if (isset($breakdown[$category])) {
@@ -103,37 +104,7 @@ class ReportsController extends Controller
      */
     private function getItemCategory($typeId)
     {
-        $groupInfo = DB::table('invTypes')
-            ->join('invGroups', 'invTypes.groupID', '=', 'invGroups.groupID')
-            ->where('invTypes.typeID', $typeId)
-            ->select('invGroups.groupID', 'invGroups.categoryID')
-            ->first();
-
-        if (!$groupInfo) {
-            return 'ore';
-        }
-
-        if (in_array($groupInfo->groupID, [490, 496, 711])) {
-            return 'gas';
-        }
-
-        if ($groupInfo->categoryID != 25) {
-            return 'ore';
-        }
-
-        if ($groupInfo->groupID == 465) {
-            return 'ice';
-        }
-
-        switch ($groupInfo->groupID) {
-            case 1884: return 'moon_r4';
-            case 1920: return 'moon_r8';
-            case 1921: return 'moon_r16';
-            case 1922: return 'moon_r32';
-            case 1923: return 'moon_r64';
-        }
-
-        return 'ore';
+        return \Rejected\SeatAllianceTax\Helpers\OreCategory::getCategoryForTypeId($typeId);
     }
 
     /**

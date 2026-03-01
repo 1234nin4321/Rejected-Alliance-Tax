@@ -121,6 +121,8 @@
                                     @else
                                         <span class="label label-default">Standard Ore</span>
                                     @endif
+
+
                                 </td>
                                 <td class="text-right">{{ number_format($value, 0) }}</td>
                                 <td class="text-right">{{ $total > 0 ? number_format(($value / $total) * 100, 1) : 0 }}%</td>

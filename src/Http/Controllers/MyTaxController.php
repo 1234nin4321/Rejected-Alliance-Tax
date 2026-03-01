@@ -371,7 +371,7 @@ class MyTaxController extends Controller
         $characterBreakdown = [];
 
         foreach ($activities as $activity) {
-            $category = OreCategory::getCategoryForTypeId($activity->type_id);
+            $category = \Rejected\SeatAllianceTax\Helpers\OreCategory::getCategoryForTypeId($activity->type_id);
 
             // Skip Gas mined in Wormholes
             if ($category === 'gas' && $activity->solar_system_id >= 31000000 && $activity->solar_system_id < 32000000) {

@@ -167,6 +167,7 @@
                                 @else
                                     <span class="label label-primary">All Items</span>
                                 @endif
+
                             </td>
                             <td>
                                 <strong>{{ number_format($rate->tax_rate, 2) }}%</strong>

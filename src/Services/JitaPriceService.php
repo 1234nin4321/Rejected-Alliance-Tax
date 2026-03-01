@@ -177,13 +177,15 @@ class JitaPriceService
         // Get item name for better logging
         $itemName = \Illuminate\Support\Facades\DB::table('invTypes')
             ->where('typeID', $typeId)
-            ->value('typeName');
+            ->value('typeName') ?? "Unknown ID: {$typeId}";
         
         // Log missing price for debugging
-        Log::warning("No price found for type ID {$typeId} ({$itemName}) - returning 0. Please check if this ore type exists in market data.");
+        Log::warning("No price found for type ID {$typeId} ({$itemName}) in both ESI and market_prices - returning 0. This will result in 0 tax for this item.");
+
         
         return 0;
     }
+
 
     /**
      * Clear price cache for a specific type or all types

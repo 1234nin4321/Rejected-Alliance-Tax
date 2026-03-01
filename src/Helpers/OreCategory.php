@@ -24,14 +24,27 @@ class OreCategory
             return 'ore';
         }
 
+        // Gas (Groups: 490: Mykoserocin, 496: Cytoserocin, 711: Gas Clouds/Fullerite)
         if (in_array($groupInfo->groupID, [490, 496, 711])) {
             return 'gas';
+        }
+
+        // Mercoxit (Group 469)
+        if ($groupInfo->groupID == 469) {
+            return 'ore';
+        }
+
+
+        // Metamorphic Ores (Equinox Ores, group 2030)
+        if ($groupInfo->groupID == 2030) {
+            return 'ore'; // Keep as ore for now or change to its own if needed
         }
 
         if ($groupInfo->categoryID != 25) {
             return 'ore';
         }
 
+        // Ice (Group 465)
         if ($groupInfo->groupID == 465) {
             return 'ice';
         }
@@ -47,3 +60,5 @@ class OreCategory
         return 'ore';
     }
 }
+
+

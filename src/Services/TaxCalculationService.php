@@ -192,7 +192,7 @@ class TaxCalculationService
             $targetCorpId = $firstActivity->corporation_id; // Default to first corp found
 
             foreach ($activities as $activity) {
-                $category = $this->getItemCategory($activity->type_id);
+                $category = \Rejected\SeatAllianceTax\Helpers\OreCategory::getCategoryForTypeId($activity->type_id);
                 
                 // Skip Gas mined in Wormholes (solar_system_id starting with 31)
                 // Wormhole systems are in the range 31000000 - 31999999
@@ -203,8 +203,8 @@ class TaxCalculationService
                 // We use the activity's actual corp for rate check
                 $taxRate = $this->getTaxRate($activity->corporation_id, $allianceId, $periodStart, $category);
                 
-                $totalValue += $activity->estimated_value;
-                $totalTaxAmount += $activity->estimated_value * ($taxRate / 100);
+                $totalValue += (float) $activity->estimated_value;
+                $totalTaxAmount += (float) $activity->estimated_value * ($taxRate / 100);
             }
 
             // Check if main character or any of alts are exempt? 
@@ -303,38 +303,7 @@ class TaxCalculationService
 
     protected function getItemCategory($typeId)
     {
-        $groupInfo = DB::table('invTypes')
-            ->join('invGroups', 'invTypes.groupID', '=', 'invGroups.groupID')
-            ->where('invTypes.typeID', $typeId)
-            ->select('invGroups.groupID', 'invGroups.categoryID')
-            ->first();
-
-        if (!$groupInfo) {
-            return 'ore';
-        }
-
-        // Gas (Groups: 490: Mykoserocin, 496: Cytoserocin, 711: Gas Clouds/Fullerite)
-        if (in_array($groupInfo->groupID, [490, 496, 711])) {
-            return 'gas';
-        }
-
-        if ($groupInfo->categoryID != 25) {
-            return 'ore';
-        }
-
-        if ($groupInfo->groupID == 465) {
-            return 'ice';
-        }
-
-        switch ($groupInfo->groupID) {
-            case 1884: return 'moon_r4';
-            case 1920: return 'moon_r8';
-            case 1921: return 'moon_r16';
-            case 1922: return 'moon_r32';
-            case 1923: return 'moon_r64';
-        }
-
-        return 'ore';
+        return \Rejected\SeatAllianceTax\Helpers\OreCategory::getCategoryForTypeId($typeId);
     }
 
     protected function getTaxRate($corporationId, $allianceId, $date, $category = 'all')
