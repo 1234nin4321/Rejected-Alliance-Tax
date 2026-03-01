@@ -4,8 +4,24 @@
 @section('page_header', 'Alliance Tax Settings')
 
 @section('full')
+<div class="row" style="margin-bottom: 20px;">
+    <div class="col-md-12">
+        <div class="pull-right">
+            <a href="{{ route('alliancetax.admin.rates.index') }}" class="btn btn-primary">
+                <i class="fa fa-percent"></i> Tax Rates
+            </a>
+            <a href="{{ route('alliancetax.admin.credits.index') }}" class="btn btn-info">
+                <i class="fa fa-users"></i> Member Credits
+            </a>
+            <a href="{{ route('alliancetax.admin.exemptions.index') }}" class="btn btn-warning">
+                <i class="fa fa-user-times"></i> Exemptions
+            </a>
+</div>
+</div>
+</div>
 
 @if(session('success'))
+
 <div class="alert alert-success alert-dismissible">
     <button type="button" class="close" data-dismiss="alert">&times;</button>
     <i class="icon fa fa-check"></i> {{ session('success') }}

@@ -202,6 +202,29 @@ Route::group([
             'as' => 'alliancetax.scope.authorize',
             'uses' => 'ScopeAuthController@authorize',
         ]);
+
+        // Member Credits Management
+        Route::group([
+            'prefix' => 'credits',
+        ], function () {
+            Route::get('/', [
+                'as' => 'alliancetax.admin.credits.index',
+                'uses' => 'AdminController@credits',
+            ]);
+            Route::post('/', [
+                'as' => 'alliancetax.admin.credits.store',
+                'uses' => 'AdminController@storeCredit',
+            ]);
+            Route::put('/{id}', [
+                'as' => 'alliancetax.admin.credits.update',
+                'uses' => 'AdminController@updateCredit',
+            ]);
+            Route::post('/recalculate', [
+                'as' => 'alliancetax.admin.credits.recalculate',
+                'uses' => 'AdminController@recalculateCredits',
+            ]);
+        });
+
     });
 
     // Corporate Ratting Tax

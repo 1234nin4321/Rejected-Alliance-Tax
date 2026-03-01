@@ -125,16 +125,17 @@ class CreditRecalculationService
             }
         }
 
-        // Reset ALL balances to 0, then apply calculated credits
+        // Reset ALL calculated balances to 0, then apply newly calculated credits.
+        // We do NOT touch manual_credit columns here.
         AllianceTaxBalance::query()->update(['balance' => 0]);
 
         foreach ($creditsByCharacter as $data) {
-            if ($data['credit'] > 0) {
-                $balance = AllianceTaxBalance::firstOrCreate(['character_id' => $data['character_id']]);
-                $balance->balance = $data['credit'];
-                $balance->save();
-            }
+            // We save even 0 to ensure the record exists for the main character
+            $balance = AllianceTaxBalance::firstOrCreate(['character_id' => $data['character_id']]);
+            $balance->balance = $data['credit'];
+            $balance->save();
         }
+
 
         $usersWithCredit = collect($creditsByCharacter)->filter(fn($d) => $d['credit'] > 0)->count();
 

@@ -9,7 +9,9 @@ use Rejected\SeatAllianceTax\Models\AllianceTaxRate;
 use Rejected\SeatAllianceTax\Models\AllianceTaxExemption;
 use Rejected\SeatAllianceTax\Models\AllianceTaxSetting;
 use Rejected\SeatAllianceTax\Models\AllianceTaxSystem;
+use Rejected\SeatAllianceTax\Models\AllianceTaxBalance;
 use Rejected\SeatAllianceTax\Jobs\CalculateAllianceTaxes;
+use Rejected\SeatAllianceTax\Services\CreditRecalculationService;
 
 class AdminController extends Controller
 {
@@ -332,5 +334,68 @@ class AdminController extends Controller
 
         return redirect()->back()
             ->with('success', 'Tax calculation record removed successfully.');
+    }
+
+    /**
+     * Display member credits management page.
+     */
+    public function credits()
+    {
+        $balances = AllianceTaxBalance::all()->map(function($b) {
+            $b->character_name = DB::table('character_infos')->where('character_id', $b->character_id)->value('name') ?? "ID: {$b->character_id}";
+            return $b;
+        });
+
+        return view('alliancetax::admin.credits', compact('balances'));
+    }
+
+    /**
+     * Store a new manual credit adjustment.
+     */
+    public function storeCredit(Request $request)
+    {
+        $request->validate([
+            'character_id' => 'required|integer',
+            'amount' => 'required|numeric',
+            'reason' => 'nullable|string|max:255',
+        ]);
+
+        $balance = AllianceTaxBalance::firstOrCreate(['character_id' => $request->character_id]);
+        $balance->manual_credit = $request->amount;
+        $balance->manual_credit_reason = $request->reason;
+        $balance->save();
+
+        return redirect()->route('alliancetax.admin.credits.index')
+            ->with('success', 'Manual credit adjustment added successfully.');
+    }
+
+    /**
+     * Update an existing manual credit adjustment.
+     */
+    public function updateCredit(Request $request, $id)
+    {
+        $request->validate([
+            'amount' => 'required|numeric',
+            'reason' => 'nullable|string|max:255',
+        ]);
+
+        $balance = AllianceTaxBalance::findOrFail($id);
+        $balance->manual_credit = $request->amount;
+        $balance->manual_credit_reason = $request->reason;
+        $balance->save();
+
+        return redirect()->route('alliancetax.admin.credits.index')
+            ->with('success', 'Manual credit adjustment updated successfully.');
+    }
+
+    /**
+     * Trigger manual credit recalculation.
+     */
+    public function recalculateCredits()
+    {
+        CreditRecalculationService::recalculate();
+
+        return redirect()->route('alliancetax.admin.credits.index')
+            ->with('success', 'Automated credits synchronized successfully. Manual adjustments were preserved.');
     }
 }

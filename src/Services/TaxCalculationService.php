@@ -222,15 +222,17 @@ class TaxCalculationService
             // Credits are managed authoritatively by CreditRecalculationService
             // We do NOT deduct from the balance here to prevent double-deduction on recalculation
             $balanceModel = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::firstOrCreate(['character_id' => $mainCharacterId]);
+            $totalAvailableCredit = (float)($balanceModel->balance + $balanceModel->manual_credit);
             $creditToApply = 0;
             $finalTaxAmount = $totalTaxAmount;
             
-            if ($balanceModel->balance > 0) {
-                $creditToApply = min($balanceModel->balance, $totalTaxAmount);
+            if ($totalAvailableCredit > 0) {
+                $creditToApply = min($totalAvailableCredit, $totalTaxAmount);
                 $finalTaxAmount = $totalTaxAmount - $creditToApply;
                 // Note: balance is NOT deducted here — it will be recalculated
-                // from source of truth (total sent vs total invoiced) after reconciliation
+                // from source of truth after reconciliation
             }
+
 
             // Check if record exists and its current status
             $existing = DB::table('alliance_tax_calculations')

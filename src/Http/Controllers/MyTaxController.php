@@ -74,9 +74,10 @@ class MyTaxController extends Controller
         // Load character names for summary
         $miningSummary->load('character');
 
-        // Get total tax credit balance
+        // Get total tax credit balance (calculated + manual)
         $totalBalance = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::whereIn('character_id', $characterIds)
-            ->sum('balance');
+            ->sum(DB::raw('balance + manual_credit'));
+
 
         // Get tax collection corporation info
         $taxCorpId = \Rejected\SeatAllianceTax\Models\AllianceTaxSetting::get('tax_collection_corporation_id');
@@ -404,9 +405,10 @@ class MyTaxController extends Controller
             $characterBreakdown[$charId]['sessions']++;
         }
 
-        // Apply credit balance
+        // Apply credit balance (calculated + manual)
         $totalCredit = \Rejected\SeatAllianceTax\Models\AllianceTaxBalance::whereIn('character_id', $characterIds)
-            ->sum('balance');
+            ->sum(DB::raw('balance + manual_credit'));
+
         $creditApplicable = min((float) $totalCredit, $totalEstimatedTax);
         $netEstimatedTax = $totalEstimatedTax - $creditApplicable;
 

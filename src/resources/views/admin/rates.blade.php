@@ -4,7 +4,21 @@
 @section('page_header', 'Tax Rates Management')
 
 @section('full')
-<div class="alert alert-info">DEBUG: VIEW LOADED FROM PLUGIN SOURCE</div>
+<div class="row" style="margin-bottom: 20px;">
+    <div class="col-md-12">
+        <div class="pull-right">
+            <a href="{{ route('alliancetax.admin.credits.index') }}" class="btn btn-info">
+                <i class="fa fa-users"></i> Manage Member Credits
+            </a>
+            <a href="{{ route('alliancetax.admin.settings') }}" class="btn btn-primary">
+                <i class="fa fa-cog"></i> Settings
+            </a>
+            <a href="{{ route('alliancetax.admin.exemptions.index') }}" class="btn btn-warning">
+                <i class="fa fa-user-times"></i> Exemptions
+            </a>
+        </div>
+    </div>
+</div>
 
 
 @if(session('success'))
