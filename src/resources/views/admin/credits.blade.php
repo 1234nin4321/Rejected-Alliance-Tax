@@ -16,10 +16,10 @@
     <div class="col-md-12">
         <div class="box box-primary">
             <div class="box-header with-border">
-                <h3 class="box-title">Manual Tax Credit Adjustments</h3>
+                <h3 class="box-title">Member Tax Credit Balances</h3>
                 <div class="box-tools">
                     <button type="button" class="btn btn-sm btn-info" data-toggle="modal" data-target="#addCreditModal">
-                        <i class="fa fa-plus"></i> Add Manual Credit
+                        <i class="fa fa-plus-minus"></i> Adjust Balance
                     </button>
                     <form action="{{ route('alliancetax.admin.credits.recalculate') }}" method="POST" style="display:inline;">
                         @csrf
@@ -98,7 +98,7 @@
                 @csrf
                 <div class="modal-header">
                     <button type="button" class="close" data-dismiss="modal">&times;</button>
-                    <h4 class="modal-title">Add Manual Credit Adjustment</h4>
+                    <h4 class="modal-title">Adjust Tax Credit Balance</h4>
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
@@ -109,9 +109,10 @@
                     </div>
                     <div class="form-group">
                         <label>Adjustment Amount (ISK)</label>
-                        <input type="number" class="form-control" name="amount" placeholder="e.g. 500000000" required>
-                        <p class="help-block">Use positive numbers for credits, negative for debits.</p>
+                        <input type="number" class="form-control" name="amount" placeholder="e.g. 50000000" required>
+                        <p class="help-block"><strong>Positive</strong> adds to credit, <strong>Negative</strong> removes from it.</p>
                     </div>
+
                     <div class="form-group">
                         <label>Reason / Note</label>
                         <input type="text" class="form-control" name="reason" placeholder="e.g. Compensation for loss">
@@ -119,7 +120,7 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Add Adjustment</button>
+                    <button type="submit" class="btn btn-primary">Apply Adjustment</button>
                 </div>
             </form>
         </div>

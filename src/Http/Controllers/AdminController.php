@@ -362,13 +362,25 @@ class AdminController extends Controller
             'reason' => 'nullable|string|max:255',
         ]);
 
-        $balance = AllianceTaxBalance::firstOrCreate(['character_id' => $request->character_id]);
-        $balance->manual_credit = $request->amount;
-        $balance->manual_credit_reason = $request->reason;
+        $balance = AllianceTaxBalance::firstOrCreate(
+            ['character_id' => $request->character_id],
+            ['balance' => 0, 'manual_credit' => 0]
+        );
+
+        $balance->manual_credit += $request->amount;
+        
+        if ($request->reason) {
+            $date = date('Y-m-d');
+            $newReason = "[{$date}] " . $request->reason;
+            $balance->manual_credit_reason = $balance->manual_credit_reason 
+                ? $balance->manual_credit_reason . " | " . $newReason
+                : $newReason;
+        }
+        
         $balance->save();
 
         return redirect()->route('alliancetax.admin.credits.index')
-            ->with('success', 'Manual credit adjustment added successfully.');
+            ->with('success', 'Credit adjustment applied successfully.');
     }
 
     /**
