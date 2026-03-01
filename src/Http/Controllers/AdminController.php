@@ -3,7 +3,9 @@
 namespace Rejected\SeatAllianceTax\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Routing\Controller;
+
 use Rejected\SeatAllianceTax\Models\AllianceTaxCalculation;
 use Rejected\SeatAllianceTax\Models\AllianceTaxRate;
 use Rejected\SeatAllianceTax\Models\AllianceTaxExemption;
