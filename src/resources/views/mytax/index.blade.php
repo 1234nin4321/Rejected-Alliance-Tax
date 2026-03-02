@@ -286,11 +286,11 @@
                                 foreach ($appliedPayments as $p) {
                                     $totalPaidOnInvoice += (float)($p['amount'] ?? 0);
                                 }
-                                $originalAmount = (float)$invoice->amount + $totalPaidOnInvoice;
-                                if ($invoice->status === 'paid') {
-                                    $originalAmount = max($originalAmount, (float)$invoice->amount);
-                                }
+                                // 'amount' is now the gross total (due to my previous fix)
+                                $originalAmount = (float)$invoice->amount;
+                                $remainingOwed = max(0, $originalAmount - $totalPaidOnInvoice);
                             @endphp
+
                             <tr>
                                 <td>
                                     <code>#{{ $invoice->id }}</code>
@@ -310,7 +310,7 @@
                                 <td class="text-right">
                                     @if($invoice->status === 'partial')
                                         <span class="text-warning">
-                                            <strong>{{ number_format($invoice->amount, 0) }} ISK</strong>
+                                            <strong>{{ number_format($remainingOwed, 0) }} ISK</strong>
                                         </span>
                                         <br>
                                         <small class="text-muted">
@@ -322,17 +322,18 @@
                                             @endphp
                                             <div class="progress-bar progress-bar-warning" style="width: {{ $pctPaid }}%"></div>
                                         </div>
-                                        <small class="text-success">{{ number_format($totalPaidOnInvoice, 0) }} ISK paid</small>
+                                        <small class="text-primary">{{ number_format($totalPaidOnInvoice, 0) }} ISK paid</small>
                                     @elseif($invoice->status === 'paid')
                                         <span class="text-success">
                                             <strong>{{ number_format($originalAmount, 0) }} ISK</strong>
                                         </span>
                                     @else
                                         <span class="text-danger">
-                                            <strong>{{ number_format($invoice->amount, 0) }} ISK</strong>
+                                            <strong>{{ number_format($remainingOwed, 0) }} ISK</strong>
                                         </span>
                                     @endif
                                 </td>
+
                                 <td>
                                     @if($invoice->status === 'paid')
                                         <span class="label label-success"><i class="fa fa-check"></i> Paid</span>
