@@ -401,14 +401,17 @@ class TaxCalculationService
             if (!isset($userTaxes[$userId])) {
                 $userTaxes[$userId] = [
                     'main_character_id' => $mainCharacterId,
-                    'total_amount' => 0,
+                    'total_amount_gross' => 0,
+                    'total_credit_applied' => 0,
                     'calculation_ids' => [],
                     'corporation_id' => $calc->corporation_id,
                 ];
             }
 
-            $userTaxes[$userId]['total_amount'] += $calc->tax_amount;
+            $userTaxes[$userId]['total_amount_gross'] += $calc->tax_amount_gross;
+            $userTaxes[$userId]['total_credit_applied'] += $calc->credit_applied;
             $userTaxes[$userId]['calculation_ids'][] = $calc->id;
+
         }
 
         $generated = 0;
@@ -422,39 +425,52 @@ class TaxCalculationService
 
             if ($existingInvoice) continue;
 
-            $invoiceAmount = floor($userTax['total_amount']);
+            $invoiceAmount = floor($userTax['total_amount_gross']);
+            $creditAmount = (float) $userTax['total_credit_applied'];
             
             // Determine if credit fully covered this invoice
-            $isCreditPaid = $invoiceAmount <= 0;
+            $isPaid = $creditAmount >= $invoiceAmount;
             
-            // Still create the invoice for record-keeping, even if 0
+            // Record any credit as an applied payment so audit trail is clear
+            $appliedPayments = [];
+            if ($creditAmount > 0) {
+                $appliedPayments[] = [
+                    'tx_id' => 'system_credit_' . time() . '_' . rand(100, 999),
+                    'amount' => min($creditAmount, $invoiceAmount),
+                    'date' => now()->toDateTimeString(),
+                    'ref_type' => 'tax_credit_applied',
+                    'note' => 'Automatic credit application from existing balance'
+                ];
+            }
+
             $invoice = \Rejected\SeatAllianceTax\Models\AllianceTaxInvoice::create([
                 'tax_calculation_id' => $userTax['calculation_ids'][0],
                 'character_id' => $userTax['main_character_id'],
                 'corporation_id' => $userTax['corporation_id'],
-                'amount' => max($invoiceAmount, 0),
+                'amount' => $invoiceAmount,
                 'invoice_date' => now(),
                 'due_date' => $dueDate,
-                'status' => $isCreditPaid ? 'paid' : 'sent',
-                'paid_at' => $isCreditPaid ? now() : null,
-                'invoice_note' => $isCreditPaid
-                    ? "Consolidated mining tax ({$periodStart->format('M d')} - {$periodEnd->format('M d, Y')}) — Covered by tax credit"
+                'status' => $isPaid ? 'paid' : ($creditAmount > 0 ? 'partial' : 'sent'),
+                'paid_at' => $isPaid ? now() : null,
+                'invoice_note' => $isPaid
+                    ? "Consolidated mining tax ({$periodStart->format('M d')} - {$periodEnd->format('M d, Y')}) — Fully covered by credit"
                     : "Consolidated mining tax ({$periodStart->format('M d')} - {$periodEnd->format('M d, Y')})",
+                'metadata' => json_encode([
+                    'calculation_ids' => $userTax['calculation_ids'],
+                    'character_count' => count($userTax['calculation_ids']),
+                    'period_start' => $periodStart->toDateString(),
+                    'period_end' => $periodEnd->toDateString(),
+                    'credit_paid' => $isPaid,
+                    'applied_payments' => $appliedPayments,
+                    'original_credit_applied' => $creditAmount
+                ]),
             ]);
 
-            // Store metadata including period info
-            $invoice->metadata = json_encode([
-                'calculation_ids' => $userTax['calculation_ids'],
-                'character_count' => count($userTax['calculation_ids']),
-                'period_start' => $periodStart->toDateString(),
-                'period_end' => $periodEnd->toDateString(),
-                'credit_paid' => $isCreditPaid,
-            ]);
-            $invoice->save();
 
-            // Mark calculations as sent (or paid if credit covered it)
+            // Mark calculations as sent (or paid if credit covered it fully)
             AllianceTaxCalculation::whereIn('id', $userTax['calculation_ids'])
-                ->update(['status' => $isCreditPaid ? 'paid' : 'sent']);
+                ->update(['status' => $isPaid ? 'paid' : 'sent']);
+
 
             $generated++;
             $invoiceIds[] = $invoice->id;

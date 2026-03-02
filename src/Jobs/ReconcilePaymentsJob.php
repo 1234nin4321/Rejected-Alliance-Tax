@@ -231,20 +231,19 @@ class ReconcilePaymentsJob implements ShouldQueue
                 }
             }
 
-            // If we applied partial payments, update the invoice
+            // If we applied new payments, update the invoice metadata
             if (count($appliedPayments) > count($metadata['applied_payments'] ?? [])) {
                 $metadata['applied_payments'] = $appliedPayments;
                 $invoice->metadata = json_encode($metadata);
                 
-                // Update the invoice amount to reflect remaining balance
+                // Calculate total applied to see if it's now fully paid
                 $totalApplied = 0;
                 foreach ($appliedPayments as $p) {
                     $totalApplied += (float) ($p['amount'] ?? 0);
                 }
-                $newRemaining = $invoiceAmount - $totalApplied;
                 
-                if ($newRemaining <= 0) {
-                    // Fully paid through multiple partials
+                if ($totalApplied >= $invoiceAmount) {
+                    // Fully paid through multiple payments
                     $invoice->status = 'paid';
                     $invoice->paid_at = now();
                     $invoice->payment_ref_id = $appliedPayments[count($appliedPayments) - 1]['tx_id'] ?? null;
@@ -258,15 +257,16 @@ class ReconcilePaymentsJob implements ShouldQueue
                     }
                     $this->markCalculationsPaid($invoice, $metadata, now());
                     $matched++;
-                    Log::info("[AllianceTax] Fully paid via partials: character {$invoice->character_id}");
+                    Log::info("[AllianceTax] Fully paid via multiple payments: character {$invoice->character_id}");
                 } else {
-                    // Still partially unpaid — update amount to remaining
-                    $invoice->amount = floor($newRemaining);
+                    // Still partially unpaid — just update metadata and status
+                    // DO NOT overwrite $invoice->amount, it must stay as the original total
                     $invoice->status = 'partial';
                     $invoice->save();
-                    Log::info("[AllianceTax] Partially paid: character {$invoice->character_id}, remaining: " . number_format($newRemaining, 0) . " ISK");
+                    Log::info("[AllianceTax] Partially paid: character {$invoice->character_id}, paid total: " . number_format($totalApplied, 0) . " / " . number_format($invoiceAmount, 0));
                 }
             }
+
         }
 
         Log::info("[AllianceTax] Reconciliation complete. Fully matched: {$matched}, Partial payments applied: {$partialCount}");

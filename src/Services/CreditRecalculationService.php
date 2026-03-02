@@ -67,24 +67,13 @@ class CreditRecalculationService
             // Get the main character
             $mainCharId = DB::table('users')->where('id', $userId)->value('main_character_id') ?? $charId;
 
-            // 1. Calculate TOTAL invoiced for this user (original amounts)
-            $invoices = AllianceTaxInvoice::whereIn('character_id', $userCharIds)->get();
+            // 1. Calculate TOTAL Gross Tax debited (invoiced) for this user's lifetime
+            // We sum the gross amount from any calculation record that has been pushed into an invoice (non-pending).
+            $totalInvoiced = (float) DB::table('alliance_tax_calculations')
+                ->whereIn('character_id', $userCharIds)
+                ->where('status', '!=', 'pending')
+                ->sum('tax_amount_gross');
 
-            $totalInvoiced = 0;
-            foreach ($invoices as $invoice) {
-                $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
-                $appliedPayments = $metadata['applied_payments'] ?? [];
-
-                // Reconstruct original invoice amount
-                $partialTotal = 0;
-                foreach ($appliedPayments as $p) {
-                    $partialTotal += (float)($p['amount'] ?? 0);
-                }
-
-                // Original amount = current remaining + all partial payments applied
-                $originalAmount = (float)$invoice->amount + $partialTotal;
-                $totalInvoiced += $originalAmount;
-            }
 
             // 2. Calculate TOTAL ISK sent by this user's characters to the tax corp
             $txQuery = DB::table($journalTable)
@@ -100,9 +89,11 @@ class CreditRecalculationService
                     'player_donation',
                     'corporation_account_withdrawal',
                     'direct_transfer',
+                    'transfer',
                     'cash_out',
                     'deposit',
                     'union_payment',
+
                 ]);
             }
 
