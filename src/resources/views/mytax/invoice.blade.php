@@ -128,10 +128,11 @@
                     <tr style="border-top: 2px solid #dd4b39;">
                         <td style="font-weight: bold;">Remaining Balance</td>
                         <td class="text-right text-danger" style="font-size: 20px;">
-                            <strong>{{ number_format($invoice->amount, 0) }} ISK</strong>
+                            <strong>{{ number_format($remainingBalance, 0) }} ISK</strong>
                         </td>
                     </tr>
                     @endif
+
                 </table>
 
                 @if($invoice->status === 'partial' || ($totalPaidOnInvoice > 0 && $invoice->status !== 'paid'))

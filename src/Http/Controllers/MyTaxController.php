@@ -245,15 +245,16 @@ class MyTaxController extends Controller
         $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
         $appliedPayments = $metadata['applied_payments'] ?? [];
 
-        // Calculate original amount and payment progress
+        // Calculate payment progress
         $totalPaidOnInvoice = 0;
         foreach ($appliedPayments as $p) {
             $totalPaidOnInvoice += (float)($p['amount'] ?? 0);
         }
-        $originalAmount = (float)$invoice->amount + $totalPaidOnInvoice;
-        if ($invoice->status === 'paid') {
-            $originalAmount = max($originalAmount, (float)$invoice->amount);
-        }
+
+        // The 'amount' column now stores the original gross total (from my previous fix)
+        $originalAmount = (float) $invoice->amount;
+        $remainingBalance = max(0, $originalAmount - $totalPaidOnInvoice);
+
 
         // Get mining activity for the invoice period if available
         $miningActivity = collect();
@@ -309,9 +310,11 @@ class MyTaxController extends Controller
             'appliedPayments',
             'totalPaidOnInvoice',
             'originalAmount',
+            'remainingBalance',
             'miningActivity',
             'taxCorp'
         ));
+
     }
 
     /**
