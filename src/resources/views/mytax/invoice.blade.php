@@ -204,7 +204,10 @@
                             <th>Character</th>
                             <th>Ore Type</th>
                             <th class="text-right">Quantity</th>
+                            <th class="text-center">Tax Rate</th>
                             <th class="text-right">Value</th>
+                            <th class="text-right">Tax Owed</th>
+
                         </tr>
                     </thead>
                     <tbody>
@@ -220,7 +223,14 @@
                                 {{ \Rejected\SeatAllianceTax\Services\OreNameTranslationService::translate($activity->type_name) }}
                             </td>
                             <td class="text-right">{{ number_format($activity->quantity) }}</td>
+                            <td class="text-center">
+                                <span class="label label-info">{{ $activity->tax_rate }}%</span>
+                            </td>
                             <td class="text-right">{{ number_format($activity->estimated_value, 0) }} ISK</td>
+                            <td class="text-right">
+                                <strong>{{ number_format($activity->estimated_value * ($activity->tax_rate / 100), 0) }} ISK</strong>
+                            </td>
+
                         </tr>
                         @endforeach
                     </tbody>
@@ -228,8 +238,16 @@
                         <tr class="info">
                             <td colspan="3" class="text-right"><strong>Total:</strong></td>
                             <td class="text-right"><strong>{{ number_format($miningActivity->sum('quantity')) }}</strong></td>
+                            <td></td>
                             <td class="text-right"><strong>{{ number_format($miningActivity->sum('estimated_value'), 0) }} ISK</strong></td>
+                            <td class="text-right">
+                                @php
+                                    $calculatedTotalTax = $miningActivity->sum(function($a) { return $a->estimated_value * ($a->tax_rate / 100); });
+                                @endphp
+                                <strong>{{ number_format($calculatedTotalTax, 0) }} ISK</strong>
+                            </td>
                         </tr>
+
                     </tfoot>
                 </table>
             </div>

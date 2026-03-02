@@ -261,12 +261,25 @@ class MyTaxController extends Controller
             $periodStart = \Carbon\Carbon::parse($metadata['period_start']);
             $periodEnd = \Carbon\Carbon::parse($metadata['period_end']);
 
+            // Load all active tax rates and settings
+            $allRates = \Rejected\SeatAllianceTax\Models\AllianceTaxRate::where('is_active', true)->get();
+            $defaultRate = \Rejected\SeatAllianceTax\Models\AllianceTaxSetting::get('default_tax_rate', 10);
+            $allianceId = \Rejected\SeatAllianceTax\Models\AllianceTaxSetting::get('alliance_id');
+
             // Get all characters for this user
             $miningActivity = AllianceMiningActivity::whereIn('character_id', $characterIds)
                 ->whereBetween('mining_date', [$periodStart, $periodEnd])
                 ->with('character')
                 ->orderBy('mining_date', 'desc')
                 ->get();
+
+            // Calculate tax rates for each activity
+            $miningActivity = $miningActivity->map(function($activity) use ($allRates, $defaultRate, $allianceId) {
+                $category = \Rejected\SeatAllianceTax\Helpers\OreCategory::getCategoryForTypeId($activity->type_id);
+                $activity->tax_rate = $this->getEstimateTaxRate($allRates, $activity->corporation_id, $allianceId, $category, $defaultRate);
+                return $activity;
+            });
+
 
             // Apply system filtering
             $taxedSystemIds = AllianceTaxSystem::pluck('solar_system_id')->toArray();
