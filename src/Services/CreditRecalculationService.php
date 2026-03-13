@@ -67,11 +67,11 @@ class CreditRecalculationService
             // Get the main character
             $mainCharId = DB::table('users')->where('id', $userId)->value('main_character_id') ?? $charId;
 
-            // 1. Calculate TOTAL Gross Tax debited (invoiced) for this user's lifetime
-            // We sum the gross amount from any calculation record that has been pushed into an invoice (non-pending).
-            $totalInvoiced = (float) DB::table('alliance_tax_calculations')
+            // 1. Calculate TOTAL Gross Tax debited (already paid) for this user's lifetime
+            // We sum the gross amount from any calculation record that is marked PAID.
+            $totalPaid = (float) DB::table('alliance_tax_calculations')
                 ->whereIn('character_id', $userCharIds)
-                ->where('status', '!=', 'pending')
+                ->where('status', 'paid')
                 ->sum('tax_amount_gross');
 
 
@@ -93,21 +93,101 @@ class CreditRecalculationService
                     'cash_out',
                     'deposit',
                     'union_payment',
-
+                    'unknown',
                 ]);
             }
 
             $totalSent = (float) $txQuery->sum('amount');
 
-            // 3. Credit = Total Sent - Total Invoiced (only if positive and > 1 ISK)
-            $credit = $totalSent - $totalInvoiced;
+            // 3. Initial Surplus = Total Sent - Total Already Paid
+            $surplus = $totalSent - $totalPaid;
 
-            if ($credit > 1) {
+            // 4. Use surplus to pay off any 'sent' or 'partial' invoices (Oldest first)
+            if ($surplus > 1) {
+                $unpaidInvoices = AllianceTaxInvoice::where('character_id', $mainCharId)
+                    ->whereIn('status', ['sent', 'partial'])
+                    ->orderBy('invoice_date', 'asc')
+                    ->get();
+
+                foreach ($unpaidInvoices as $invoice) {
+                    $invoiceAmount = (float) $invoice->amount;
+                    $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
+                    $appliedPayments = $metadata['applied_payments'] ?? [];
+                    
+                    $alreadyPaidOnThisInvoice = 0;
+                    foreach ($appliedPayments as $p) {
+                        $alreadyPaidOnThisInvoice += (float) ($p['amount'] ?? 0);
+                    }
+                    $remainingDue = $invoiceAmount - $alreadyPaidOnThisInvoice;
+
+                    if ($remainingDue <= 0) {
+                        // Mark as paid if it's somehow already covered
+                        $invoice->status = 'paid';
+                        $invoice->paid_at = $invoice->paid_at ?? now();
+                        $invoice->save();
+                        continue;
+                    }
+
+                    if ($surplus >= $remainingDue) {
+                        // We have enough surplus to fully pay this invoice
+                        $appliedPayments[] = [
+                            'tx_id' => 'surplus_reconciliation_' . time() . '_' . rand(100, 999),
+                            'amount' => $remainingDue,
+                            'date' => now()->toDateTimeString(),
+                            'ref_type' => 'balance_reconciliation',
+                            'note' => 'Paid from surplus balance during reconciliation'
+                        ];
+                        
+                        $invoice->status = 'paid';
+                        $invoice->paid_at = now();
+                        $invoice->metadata = json_encode(array_merge($metadata, ['applied_payments' => $appliedPayments]));
+                        $invoice->save();
+
+                        // Mark related calculations as paid
+                        DB::table('alliance_tax_calculations')
+                            ->where('character_id', $mainCharId)
+                            ->where('status', '!=', 'paid')
+                            ->where(function($q) use ($invoice, $metadata) {
+                                $q->where('id', $invoice->tax_calculation_id);
+                                if (isset($metadata['calculation_ids']) && is_array($metadata['calculation_ids'])) {
+                                    $q->orWhereIn('id', $metadata['calculation_ids']);
+                                }
+                            })
+                            ->update([
+                                'status' => 'paid',
+                                'is_paid' => true,
+                                'paid_at' => now(),
+                            ]);
+
+                        $surplus -= $remainingDue;
+                        Log::info("[AllianceTax] Invoice #{$invoice->id} fully paid from surplus for character {$mainCharId}");
+                    } else if ($surplus > 0) {
+                        // Use ALL remaining surplus as a partial payment
+                        $appliedPayments[] = [
+                            'tx_id' => 'surplus_partial_' . time() . '_' . rand(100, 999),
+                            'amount' => $surplus,
+                            'date' => now()->toDateTimeString(),
+                            'ref_type' => 'balance_reconciliation',
+                            'note' => 'Partial payment from surplus balance during reconciliation'
+                        ];
+                        
+                        $invoice->status = 'partial';
+                        $invoice->metadata = json_encode(array_merge($metadata, ['applied_payments' => $appliedPayments]));
+                        $invoice->save();
+                        
+                        Log::info("[AllianceTax] " . number_format($surplus, 0) . " ISK surplus applied as partial payment to invoice #{$invoice->id} for character {$mainCharId}");
+                        $surplus = 0;
+                    }
+                }
+            }
+
+            // 5. Final Credit = Remaining Surplus
+            if ($surplus > 1) {
                 $creditsByCharacter[$userKey] = [
                     'character_id' => $mainCharId,
-                    'credit' => floor($credit),
+                    'credit' => floor($surplus),
                 ];
-                $totalCreditsApplied += floor($credit);
+                $totalCreditsApplied += floor($surplus);
             } else {
                 $creditsByCharacter[$userKey] = [
                     'character_id' => $mainCharId,

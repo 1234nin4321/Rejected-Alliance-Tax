@@ -102,17 +102,23 @@ class ReconcilePaymentsJob implements ShouldQueue
             return;
         }
 
-        // Load all already-used transaction IDs
+        // Load all already-used transaction IDs from all invoices (including partials)
         $usedTxIds = AllianceTaxInvoice::whereNotNull('payment_ref_id')
             ->pluck('payment_ref_id')
+            ->map(function($id) { return (string) $id; })
             ->toArray();
         
-        // Also load partial payment transaction IDs from metadata
-        foreach ($unpaidInvoices as $invoice) {
-            $metadata = $invoice->metadata ? json_decode($invoice->metadata, true) : [];
-            $appliedPayments = $metadata['applied_payments'] ?? [];
-            foreach ($appliedPayments as $payment) {
-                $usedTxIds[] = (string) ($payment['tx_id'] ?? '');
+        // Also load all transaction IDs from metadata of ALL invoices
+        $allMetadata = AllianceTaxInvoice::whereNotNull('metadata')
+            ->pluck('metadata');
+        
+        foreach ($allMetadata as $metaJson) {
+            $meta = json_decode($metaJson, true);
+            $applied = $meta['applied_payments'] ?? [];
+            foreach ($applied as $p) {
+                if (isset($p['tx_id'])) {
+                    $usedTxIds[] = (string) $p['tx_id'];
+                }
             }
         }
         $usedTxIds = array_unique(array_filter($usedTxIds));
@@ -162,11 +168,11 @@ class ReconcilePaymentsJob implements ShouldQueue
 
                 $txAmount = (float) ($row['amount'] ?? 0);
 
-                // Only match transactions that occurred after the invoice was created
-                // (with a 5-minute buffer for ESI sync timing differences)
+                // Match transactions that occurred around or after the invoice was created
+                // (with a 3-day buffer to allow for early payments made right after mining)
                 $txDate = Carbon::parse($row['date'] ?? now());
-                $invoiceCreated = Carbon::parse($invoice->created_at)->subMinutes(5);
-                if ($txDate < $invoiceCreated) {
+                $earliestAllowed = Carbon::parse($invoice->created_at)->subDays(3);
+                if ($txDate < $earliestAllowed) {
                     continue;
                 }
                 
