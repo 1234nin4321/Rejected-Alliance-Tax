@@ -244,10 +244,7 @@
                                             @endif
                                         </td>
                                         <td class="text-right" style="padding-right: 20px;">
-                                            <form method="POST" action="{{ route('alliancetax.invoices.mark-paid', $invoice->id) }}" style="display:inline;">
-                                                @csrf
-                                                <button type="submit" class="btn btn-xs btn-success"><i class="fa fa-check"></i> Paid</button>
-                                            </form>
+                                            <button type="submit" formaction="{{ route('alliancetax.invoices.mark-paid', $invoice->id) }}" formmethod="POST" class="btn btn-xs btn-success"><i class="fa fa-check"></i> Paid</button>
                                         </td>
                                     </tr>
                                     @empty
