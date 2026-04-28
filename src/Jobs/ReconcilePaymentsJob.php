@@ -52,9 +52,12 @@ class ReconcilePaymentsJob implements ShouldQueue
         // Look back 60 days for payments
         $since = Carbon::now()->subDays(60);
 
-        // Get unpaid invoices (including partially paid ones)
+        // Get unpaid invoices (including partially paid ones).
+        // Process oldest first so overdue invoices are settled before new ones,
+        // allowing overpayments to roll forward to the newer invoice in the same pass.
         $unpaidInvoices = AllianceTaxInvoice::where('status', '!=', 'paid')
             ->with('character')
+            ->orderBy('created_at', 'asc')
             ->get();
 
         if ($unpaidInvoices->isEmpty()) {
@@ -126,6 +129,11 @@ class ReconcilePaymentsJob implements ShouldQueue
         $matched = 0;
         $partialCount = 0;
 
+        // Track overpayments per character so a single large transaction can
+        // immediately satisfy subsequent invoices for the same character.
+        // Key: character_id, Value: float ISK remaining from an overpayment.
+        $carryForward = [];
+
         foreach ($unpaidInvoices as $invoice) {
             $userCharIds = $invoiceCharMap[$invoice->id] ?? [(int)$invoice->character_id];
             $invoiceAmount = (float) $invoice->amount;
@@ -144,6 +152,42 @@ class ReconcilePaymentsJob implements ShouldQueue
                 $this->markInvoiceFullyPaid($invoice, $metadata);
                 $matched++;
                 continue;
+            }
+
+            // ── Apply any carry-forward overpayment from a previous invoice ──
+            // This handles the case where a single wallet transaction was larger
+            // than the first invoice — the surplus is immediately applied here.
+            $charKey = (int) $invoice->character_id;
+            if (!empty($carryForward[$charKey])) {
+                $carry = (float) $carryForward[$charKey];
+                if ($carry >= $remaining) {
+                    // Carry-forward alone fully covers this invoice
+                    $carryForward[$charKey] = $carry - $remaining;
+                    $appliedPayments[] = [
+                        'tx_id'     => 'carry_forward_' . time() . '_' . $invoice->id,
+                        'amount'    => $remaining,
+                        'date'      => now()->toDateTimeString(),
+                        'ref_type'  => 'carry_forward_credit',
+                        'note'      => 'Applied from overpayment on previous invoice',
+                    ];
+                    $metadata['applied_payments'] = $appliedPayments;
+                    $this->markInvoiceFullyPaid($invoice, $metadata);
+                    $matched++;
+                    Log::info("[AllianceTax] Invoice #{$invoice->id} for character {$invoice->character_id} cleared by carry-forward credit.");
+                    continue;
+                } else {
+                    // Partial cover from carry-forward, then fall through to find more transactions
+                    $remaining -= $carry;
+                    $appliedPayments[] = [
+                        'tx_id'     => 'carry_forward_' . time() . '_' . $invoice->id,
+                        'amount'    => $carry,
+                        'date'      => now()->toDateTimeString(),
+                        'ref_type'  => 'carry_forward_credit',
+                        'note'      => 'Partial carry-forward from previous invoice overpayment',
+                    ];
+                    $carryForward[$charKey] = 0;
+                    Log::info("[AllianceTax] Partial carry-forward of " . number_format($carry, 0) . " ISK applied to invoice #{$invoice->id}. Remaining: " . number_format($remaining, 0) . " ISK.");
+                }
             }
 
             // Find matching transactions for this invoice
@@ -185,17 +229,20 @@ class ReconcilePaymentsJob implements ShouldQueue
                     
                     // Record this payment
                     $appliedPayments[] = [
-                        'tx_id' => $txId,
-                        'amount' => $remaining, // Only count what was needed
-                        'date' => $row['date'] ?? now()->toDateTimeString(),
+                        'tx_id'    => $txId,
+                        'amount'   => $remaining, // Only count what was needed
+                        'date'     => $row['date'] ?? now()->toDateTimeString(),
                         'ref_type' => $row['ref_type'] ?? 'unknown',
                     ];
                     $metadata['applied_payments'] = $appliedPayments;
 
-                    // Note overpayment in metadata (credits are recalculated authoritatively after reconciliation)
+                    // Store overpayment in metadata AND in the carry-forward map
+                    // so subsequent invoices for the same character are cleared in
+                    // this same reconciliation pass — not just on the next run.
                     if ($overpaid > 0) {
-                        $metadata['overpaid_amount'] = $overpaid;
-                        Log::info("[AllianceTax] Overpayment detected: " . number_format($overpaid, 0) . " ISK for character {$invoice->character_id} (will be applied during credit recalculation)");
+                        $metadata['overpaid_amount'] = ($metadata['overpaid_amount'] ?? 0) + $overpaid;
+                        $carryForward[$charKey] = ($carryForward[$charKey] ?? 0) + $overpaid;
+                        Log::info("[AllianceTax] Overpayment of " . number_format($overpaid, 0) . " ISK for character {$invoice->character_id} — carrying forward to next invoice in this pass.");
                     }
 
                     $invoice->status = 'paid';
