@@ -245,10 +245,14 @@ class TaxCalculationService
             $isPaid = false;
             $paidAt = null;
 
-            if ($existing && ($existing->status === 'paid' || $existing->is_paid)) {
-                $status = 'paid';
-                $isPaid = true;
-                $paidAt = $existing->paid_at;
+            if ($existing) {
+                if ($existing->status === 'paid' || $existing->is_paid) {
+                    $status = 'paid';
+                    $isPaid = true;
+                    $paidAt = $existing->paid_at;
+                } elseif ($existing->status === 'sent') {
+                    $status = 'sent';
+                }
             }
 
             DB::table('alliance_tax_calculations')->updateOrInsert(
@@ -418,9 +422,13 @@ class TaxCalculationService
         $invoiceIds = [];
         
         foreach ($userTaxes as $userId => $userTax) {
-            // Check if invoice already exists for this user this period
+            // Check if ANY invoice already exists for this user covering this period
+            // We check metadata for period_start/end or just any invoice with the same main character
+            // Since we marked calculations as 'sent', they shouldn't even be in $userTaxes if they were already processed.
+            // But as a safety measure, we check if an invoice exists for this user in the last 30 days for this period.
             $existingInvoice = \Rejected\SeatAllianceTax\Models\AllianceTaxInvoice::where('character_id', $userTax['main_character_id'])
-                ->where('invoice_date', '>=', now()->startOfDay())
+                ->where('metadata', 'like', '%' . $periodStart->toDateString() . '%')
+                ->where('metadata', 'like', '%' . $periodEnd->toDateString() . '%')
                 ->first();
 
             if ($existingInvoice) continue;

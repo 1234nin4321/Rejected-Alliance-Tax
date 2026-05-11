@@ -44,17 +44,25 @@ class SeatAllianceTaxServiceProvider extends AbstractSeatPlugin
             $schedule = $this->app->make(\Illuminate\Console\Scheduling\Schedule::class);
             
             // Reconcile payments every 10 minutes
-            $schedule->job(new \Rejected\SeatAllianceTax\Jobs\ReconcilePaymentsJob)->everyTenMinutes();
+            $schedule->job(new \Rejected\SeatAllianceTax\Jobs\ReconcilePaymentsJob)
+                ->everyTenMinutes()
+                ->withoutOverlapping();
 
             // Refresh Jita prices every hour
-            $schedule->command('alliancetax:refresh-prices')->hourly();
+            $schedule->command('alliancetax:refresh-prices')
+                ->hourly()
+                ->withoutOverlapping();
 
             // Sync recent mining data for estimates every 15 minutes
-            $schedule->command('alliancetax:sync-mining')->everyFifteenMinutes();
+            $schedule->command('alliancetax:sync-mining')
+                ->everyFifteenMinutes()
+                ->withoutOverlapping();
 
             // Calculate taxes weekly on Mondays at 01:00
             // This will trigger automated invoice generation if enabled in settings
-            $schedule->command('alliancetax:calculate')->weeklyOn(1, '01:00');
+            $schedule->command('alliancetax:calculate')
+                ->weeklyOn(1, '01:00')
+                ->withoutOverlapping();
         });
     }
 
@@ -87,6 +95,7 @@ class SeatAllianceTaxServiceProvider extends AbstractSeatPlugin
             \Rejected\SeatAllianceTax\Console\Commands\DiagnosePricing::class,
             \Rejected\SeatAllianceTax\Console\Commands\RecalculateMiningValues::class,
             \Rejected\SeatAllianceTax\Console\Commands\DiagnoseCorpTax::class,
+            \Rejected\SeatAllianceTax\Console\Commands\CleanupDuplicateInvoices::class,
         ]);
     }
 
